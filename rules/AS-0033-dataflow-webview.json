@@ -1,0 +1,16 @@
+{
+  "id": "AS-0033",
+  "title": "Attacker input reaches WebView sink",
+  "kind": "smali-taint",
+  "check": "smali_taint",
+  "severity": "high",
+  "maswe": "MASWE-0035",
+  "tags": ["webview", "dataflow"],
+  "params": {
+    "sources": ["getIntent", "getData", "getStringExtra", "getParcelableExtra", "getSerializableExtra"],
+    "sinks": ["loadUrl", "addJavascriptInterface"],
+    "cap": 15
+  },
+  "recommendation": "Validate the URI/origin before loading; disable file access unless needed.",
+  "repro": "am start -W -a android.intent.action.VIEW -d \"<scheme>://<host>/poc\" {package}"
+}

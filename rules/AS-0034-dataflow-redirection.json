@@ -1,0 +1,16 @@
+{
+  "id": "AS-0034",
+  "title": "Attacker input drives component navigation",
+  "kind": "smali-taint",
+  "check": "smali_taint",
+  "severity": "high",
+  "maswe": "MASWE-0032",
+  "tags": ["ipc", "intent-redirection", "dataflow"],
+  "params": {
+    "sources": ["getIntent", "getParcelableExtra", "getSerializableExtra", "getStringExtra", "getData"],
+    "sinks": ["startActivity", "startService", "sendBroadcast", "setClass"],
+    "cap": 15
+  },
+  "recommendation": "Never let an inbound extra select the target component/action. Allow-list destinations.",
+  "repro": "am start -n {package}/{component} --es redirect <internal>"
+}
