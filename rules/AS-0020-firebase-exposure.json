@@ -1,0 +1,16 @@
+{
+  "id": "AS-0020",
+  "title": "Firebase / Google cloud endpoint in package",
+  "kind": "regex",
+  "check": "regex",
+  "severity": "medium",
+  "maswe": "MASWE-0004",
+  "tags": ["secrets", "firebase", "cloud"],
+  "params": {
+    "root": ".",
+    "pattern": "firebaseio\\.com|firebaseapp\\.com|googleapis\\.com|google-services\\.json|FirebaseApp\\.initializeApp|\\.runTransaction",
+    "exts": [".xml", ".json", ".java", ".kt", ".smali", ".txt", ".js"]
+  },
+  "recommendation": "Verify the Firebase DB is locked down: curl https://<db>.firebaseio.com/.json must 401/404. An open read (worse: write) is PII leak. Restrict via Database Rules, don't rely on obscurity.",
+  "repro": "curl -s https://<db>.firebaseio.com/.json | head -20"
+}

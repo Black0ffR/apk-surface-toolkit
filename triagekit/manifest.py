@@ -82,6 +82,7 @@ def parse(manifest_path: str) -> dict:
         "min_sdk": "", "target_sdk": "", "application": {}, "components": [],
         "permissions": [], "uses_permissions": [], "defined_permissions": [],
         "deeplinks": [], "app_links": [], "custom_schemes": [],
+        "meta_data": [],
         "parse_error": None,
     }
     if not os.path.isfile(manifest_path):
@@ -131,6 +132,12 @@ def parse(manifest_path: str) -> dict:
             v = _attr(app, fname)
             if v is not None:
                 empty["application"][fname] = v
+
+    for md in root.iter("meta-data"):
+        n = md.get(NS + "name") or ""
+        v = md.get(NS + "value") or md.get(NS + "resource") or ""
+        if n:
+            empty["meta_data"].append({"name": n, "value": str(v)})
 
     for tag in COMPONENT_TAGS:
         for el in app.iter(tag):
@@ -291,4 +298,36 @@ def read_network_security_config(decoded_dir: str) -> list[dict]:
         rec = {"file": f"res/xml/{fn}", "source": "apktool decode"}
         rec.update(_nsc_from_tree(root))
         out.append(rec)
+    return out
+
+
+def read_file_provider_paths(decoded_dir: str) -> list[dict]:
+    """Parse res/xml/*paths*.xml (FileProvider path grants).
+
+    Returns [{file, entries:[{tag, name, path}], risky:bool}].
+    Risky = root-path or path="."/""/"/" which exposes far more than intended.
+    """
+    out = []
+    xml_dir = os.path.join(decoded_dir, "res", "xml")
+    if not os.path.isdir(xml_dir):
+        return out
+    for fn in sorted(os.listdir(xml_dir)):
+        if not re.search(r"paths?\.xml$", fn):
+            continue
+        p = os.path.join(xml_dir, fn)
+        try:
+            root = ET.parse(p).getroot()
+        except ET.ParseError:
+            continue
+        entries = []
+        for el in root.iter():
+            if el.tag in ("paths",):
+                continue
+            path = el.get("path") or ""
+            entries.append({"tag": el.tag, "name": el.get("name") or "",
+                            "path": path})
+        risky = any(e["tag"] == "root-path" or e["path"] in (".", "", "/")
+                    for e in entries)
+        out.append({"file": f"res/xml/{fn}", "entries": entries,
+                    "risky": risky})
     return out

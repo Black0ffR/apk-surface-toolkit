@@ -1,0 +1,16 @@
+{
+  "id": "AS-0021",
+  "title": "Hardcoded backend URL / base host (incl. staging/internal)",
+  "kind": "regex",
+  "check": "regex",
+  "severity": "info",
+  "maswe": "MASWE-0004",
+  "tags": ["recon", "endpoints"],
+  "params": {
+    "root": ".",
+    "pattern": "https?://[a-z0-9][a-z0-9.\\-]*\\.[a-z]{2,}|http://10\\.\\d+\\.\\d+\\.\\d+|http://192\\.168\\.\\d+\\.\\d+|\\.amazonaws\\.com|\\.s3\\.[a-z0-9\\-]+\\.amazonaws|\\.blob\\.core\\.windows\\.net|cloudfront\\.net",
+    "exts": [".xml", ".java", ".kt", ".smali", ".js", ".json", ".txt"]
+  },
+  "recommendation": "Treat each non-public host (staging/internal/partner) as a new recon target: httpx, crawl, test auth. Strip framework noise (schemas/android/google/w3).",
+  "repro": "grep -rhoE 'https?://[^ \"<>]+' <decode> | sort -u | head -80"
+}

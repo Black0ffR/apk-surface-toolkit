@@ -1,0 +1,11 @@
+{
+  "id": "AS-0024",
+  "title": "FileProvider paths grant overly broad access",
+  "kind": "manifest",
+  "check": "paths_traversal",
+  "severity": "high",
+  "maswe": "MASWE-0002",
+  "tags": ["provider", "path-traversal", "storage"],
+  "recommendation": "Narrow res/xml/*paths*.xml: avoid root-path and path=\".\"/\"/\". Scope each <paths> entry to the exact dir, then test content://<auth>/../ traversal.",
+  "repro": "content query --uri \"content://{authority}/../databases/app.db\""
+}

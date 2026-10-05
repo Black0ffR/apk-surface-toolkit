@@ -4,7 +4,7 @@
   "kind": "manifest",
   "check": "provider_exposed",
   "severity": "high",
-  "maswe": "MASWE-0008",
+  "maswe": "MASWE-0032",
   "tags": [
     "ipc",
     "provider"

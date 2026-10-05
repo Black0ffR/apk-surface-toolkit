@@ -3,9 +3,15 @@
   "title": "Application is debuggable",
   "kind": "manifest",
   "check": "flag",
-  "params": { "flag": "debuggable", "value": true },
-  "severity": "high",
-  "maswe": "MASWE-0011",
-  "tags": ["build", "android"],
+  "params": {
+    "flag": "debuggable",
+    "value": true
+  },
+  "severity": "info",
+  "maswe": "MASWE-0063",
+  "tags": [
+    "build",
+    "android"
+  ],
   "recommendation": "android:debuggable must never be true in a release build. Any app can attach a debugger and read process memory."
 }

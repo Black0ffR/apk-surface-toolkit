@@ -4,7 +4,10 @@
   "kind": "manifest",
   "check": "custom_permission_weak",
   "severity": "low",
-  "maswe": "MASWE-0008",
-  "tags": ["permission", "android"],
+  "maswe": "MASWE-0018",
+  "tags": [
+    "permission",
+    "android"
+  ],
   "recommendation": "Use protectionLevel=\"signature\" so only apps signed with the same key can hold the permission."
 }

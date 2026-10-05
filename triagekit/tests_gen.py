@@ -131,6 +131,11 @@ def generate(r: dict, path: str) -> str:
         L.append('echo "(no deep links)"\n')
 
     L.append('# ---------------------------------------------------------------- misc probes')
+    L.append('echo "--- cloud endpoints (verify live, keys alone are N/A)"')
+    L.append(f'# firebase: curl -s https://<db>.firebaseio.com/.json | head -20  (must 401/404)')
+    L.append(f'# s3: aws s3 ls s3://<bucket> --no-sign-request; curl -s https://<bucket>.s3.amazonaws.com/ | head -20')
+    L.append(f'# maps/geofeed keys in meta-data: call the API as the key, check referrer restrictions')
+    L.append("")
     L.append('echo "--- backup / data extraction"')
     L.append(f'# allowBackup on a debuggable or debug-signed build:')
     L.append(f'#   adb backup -apk -shared com.{pkg}  (older platforms)')

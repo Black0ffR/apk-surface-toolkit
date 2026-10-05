@@ -61,7 +61,8 @@ def _is_launcher(comp: dict) -> bool:
 
 
 def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
-                   platform: set | None = None) -> list[dict]:
+                   platform: set | None = None,
+                   file_paths: list | None = None) -> list[dict]:
     out: list[dict] = []
     platform = platform or set()
     defined = {p["name"] for p in man.get("defined_permissions", [])}
@@ -204,6 +205,27 @@ def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
                 if pl in ("normal", "dangerous", "") or pl.startswith("normal"):
                     out.append(R.finding(r, evidence=f'{p["name"]} protectionLevel="{pl or "normal (default)"}"',
                                          extra=p))
+        elif c == "paths_traversal":
+            for fp in (file_paths or []):
+                if fp.get("risky"):
+                    detail = ", ".join(
+                        f'{e["tag"]} path="{e["path"]}"'
+                        for e in fp.get("entries", [])[:6])
+                    out.append(R.finding(
+                        r, file=fp.get("file", ""),
+                        evidence=f'{fp.get("file")} grants broad access: {detail}',
+                        extra={"paths": fp}))
+        elif c == "meta_data_secret":
+            needles = [s.lower() for s in r.params.get(
+                "names", ["key", "secret", "token", "password",
+                           "firebase", "google-api", "api_key"])]
+            for md in man.get("meta_data", []):
+                name = str(md.get("name", ""))
+                val = str(md.get("value", ""))
+                if any(n in name.lower() for n in needles):
+                    out.append(R.finding(
+                        r, evidence=f'meta-data {name}="{val[:120]}"',
+                        extra={"meta": md}))
     return out
 
 
@@ -343,7 +365,9 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
             })
 
     if decoded_ok and man:
-        findings += check_manifest(all_rules, man, nsc, platform)
+        file_paths = mf.read_file_provider_paths(decode_dir) if (
+            decoded_ok and not blind_code) else []
+        findings += check_manifest(all_rules, man, nsc, platform, file_paths)
         if blind_code:
             findings.append({
                 "id": "BLIND-0003", "tool": "apk-surface", "rule": "BLIND-0003",
@@ -396,6 +420,8 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         "deeplinks": man.get("deeplinks", []),
         "app_links": man.get("app_links", []),
         "custom_schemes": man.get("custom_schemes", []),
+        "meta_data": man.get("meta_data", []),
+        "file_provider_paths": file_paths if decoded_ok and man else [],
         "network_security_config": nsc,
         "signature": sig,
         "structure": st,

@@ -2,9 +2,15 @@
   "id": "AS-0014",
   "title": "JavaScript bridge exposed to a WebView",
   "kind": "regex",
-  "params": { "root": ".", "pattern": "addJavascriptInterface|@JavascriptInterface" },
+  "params": {
+    "root": ".",
+    "pattern": "addJavascriptInterface|@JavascriptInterface"
+  },
   "severity": "high",
-  "maswe": "MASWE-0008",
-  "tags": ["webview", "java"],
+  "maswe": "MASWE-0035",
+  "tags": [
+    "webview",
+    "java"
+  ],
   "recommendation": "Only expose @JavascriptInterface methods on a WebView that loads trusted, validated origins. File access plus a JS bridge is remote code execution."
 }

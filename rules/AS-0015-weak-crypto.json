@@ -4,7 +4,7 @@
   "kind": "regex",
   "params": {
     "root": ".",
-    "pattern": "Cipher\\.getInstance\\(\\s*\"(AES|DES|DESede|RC2|RC4|Blowfish)\"(\\s*/\\s*ECB[^/]*)?\"|\"(DES|DESede|RC4)\"|Cipher\\.getInstance\\(\\s*\"[A-Z0-9-]+\"\\s*,\\s*\"[A-Z0-9-]+\"\\s*,\\s*\"(ECB|GCM)\"",
+    "pattern": "Cipher\\.getInstance\\(\\s*\"(AES|DES|DESede|RC2|RC4|Blowfish)\"(\\s*/\\s*ECB[^/]*)?\"|\"(DES|DESede|RC4)\"|MessageDigest\\.getInstance\\(\\s*\"(MD5|SHA-?1)\"|SecureRandom.*setSeed\\s*\\(|IvParameterSpec\\s*\\(|SecretKeySpec\\s*\\(",
     "exts": [
       ".java",
       ".kt",
