@@ -131,6 +131,10 @@ def generate(r: dict, path: str) -> str:
         L.append('echo "(no deep links)"\n')
 
     L.append('# ---------------------------------------------------------------- misc probes')
+    L.append('echo "--- task hijacking / tapjacking (need attacker app + overlay)"')
+    L.append(f'# strandhogg: install PoC app with same taskAffinity, then: am start -n {pkg}/<exported-activity>')
+    L.append(f'# tapjacking: draw overlay over exported activity, verify filterTouchesWhenObscured')
+    L.append("")
     L.append('echo "--- cloud endpoints (verify live, keys alone are N/A)"')
     L.append(f'# firebase: curl -s https://<db>.firebaseio.com/.json | head -20  (must 401/404)')
     L.append(f'# s3: aws s3 ls s3://<bucket> --no-sign-request; curl -s https://<bucket>.s3.amazonaws.com/ | head -20')

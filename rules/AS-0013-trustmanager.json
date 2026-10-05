@@ -9,6 +9,10 @@
       ".java",
       ".kt",
       ".smali"
+    ],
+    "skip_dirs": [
+      "res",
+      "assets"
     ]
   },
   "severity": "high",

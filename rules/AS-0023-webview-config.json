@@ -5,11 +5,21 @@
   "check": "regex",
   "severity": "medium",
   "maswe": "MASWE-0035",
-  "tags": ["webview"],
+  "tags": [
+    "webview"
+  ],
   "params": {
     "root": ".",
     "pattern": "setJavaScriptEnabled\\s*\\(\\s*true|setAllowFileAccess\\s*\\(\\s*true|setAllowUniversalAccessFromFileURLs\\s*\\(\\s*true|setAllowFileAccessFromFileURLs\\s*\\(\\s*true|\\.loadUrl\\s*\\(",
-    "exts": [".java", ".kt", ".smali"]
+    "exts": [
+      ".java",
+      ".kt",
+      ".smali"
+    ],
+    "skip_dirs": [
+      "res",
+      "assets"
+    ]
   },
   "recommendation": "JS+file-access+attacker URL = token/file theft. Load only validated origins, disable file access unless needed, and gate the bridge on origin.",
   "repro": "am start -W -a android.intent.action.VIEW -d \"<scheme>://<host>/poc\" {package}"

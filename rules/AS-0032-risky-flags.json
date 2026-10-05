@@ -1,0 +1,15 @@
+{
+  "id": "AS-0032",
+  "title": "Risky application flag set",
+  "kind": "manifest",
+  "check": "risky_flags",
+  "severity": "info",
+  "maswe": "MASWE-0050",
+  "tags": ["build", "manifest"],
+  "params": {
+    "flags": ["testOnly", "extractNativeLibs", "usesNonSdkApi"],
+    "values": {"testOnly": true, "extractNativeLibs": false, "usesNonSdkApi": true}
+  },
+  "recommendation": "testOnly must never ship; extractNativeLibs=false loads libs from the APK (perf/integrity note); usesNonSdkApi declares grey-list use that breaks across releases.",
+  "repro": "grep -n testOnly AndroidManifest.xml"
+}

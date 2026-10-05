@@ -1,0 +1,12 @@
+{
+  "id": "AS-0029",
+  "title": "Network security config trusts user CAs",
+  "kind": "manifest",
+  "check": "nsc_hardening",
+  "severity": "medium",
+  "maswe": "MASWE-0027",
+  "tags": ["network", "tls", "pinning"],
+  "params": {"want": "user_ca"},
+  "recommendation": "User trust anchors let a proxy CA intercept release traffic. Restrict to system CAs + pin-set in release builds.",
+  "repro": "cat {file}"
+}

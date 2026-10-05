@@ -62,7 +62,9 @@ def _is_launcher(comp: dict) -> bool:
 
 def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
                    platform: set | None = None,
-                   file_paths: list | None = None) -> list[dict]:
+                   file_paths: list | None = None,
+                   sig: dict | None = None,
+                   backup_rules: list | None = None) -> list[dict]:
     out: list[dict] = []
     platform = platform or set()
     defined = {p["name"] for p in man.get("defined_permissions", [])}
@@ -226,6 +228,193 @@ def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
                     out.append(R.finding(
                         r, evidence=f'meta-data {name}="{val[:120]}"',
                         extra={"meta": md}))
+        elif c == "strandhogg":
+            modes = set(r.params.get("modes", ["singleTask", "singleInstance"]))
+            for comp in comps:
+                if comp.get("type") not in ("activity", "activity-alias"):
+                    continue
+                if not comp.get("exported"):
+                    continue
+                aff = (comp.get("task_affinity") or "")
+                lm = (comp.get("launch_mode") or "")
+                reparent = comp.get("allow_task_reparenting") is True
+                if aff and aff != pkg and (lm in modes or reparent):
+                    out.append(R.finding(
+                        r, component=comp["name"],
+                        evidence=(f'{comp["type"]} taskAffinity="{aff}" '
+                                  f'launchMode="{lm or "-"}"'
+                                  f'{" allowTaskReparenting=true" if reparent else ""}'),
+                        extra={"type": comp["type"]}))
+        elif c == "tapjacking":
+            acts = [c2["name"] for c2 in comps
+                    if c2.get("type") in ("activity", "activity-alias")
+                    and c2.get("exported")]
+            if acts:
+                shown = ", ".join(f"`{a}`" for a in acts[:10])
+                more = f" +{len(acts) - 10} more" if len(acts) > 10 else ""
+                out.append(R.finding(
+                    r, evidence=(f"{len(acts)} exported activit(es): "
+                                 f"{shown}{more}. Verify overlay handling "
+                                 f"(filterTouchesWhenObscured / FLAG_WINDOW_IS_OBSCURED) manually."),
+                    extra={"activities": acts[:25], "count": len(acts)}))
+        elif c == "sig_verdict":
+            s = sig or {}
+            if not s.get("ok"):
+                continue
+            v1 = bool(s.get("v1"))
+            v2 = bool(s.get("v2"))
+            v3 = bool(s.get("v3"))
+            dn = str(s.get("dn", ""))
+            if "Android Debug" in dn or "CN=Android Debug" in dn:
+                out.append(R.finding(
+                    r, evidence=f"signed with debug certificate: {dn[:120]}",
+                    extra={"dn": dn}))
+            try:
+                minsdk = int(str(man.get("min_sdk") or "0"))
+            except ValueError:
+                minsdk = 0
+            if v1 and not (v2 or v3) and minsdk <= 27:
+                out.append(R.finding(
+                    r, evidence=(f"v1-only signature with minSdk {minsdk or '?'} "
+                                 f"(Janus CVE-2017-13156 reachable on API 21-27 via trojanized install)"),
+                    extra={"v1": v1, "v2": v2, "v3": v3, "min_sdk": minsdk}))
+        elif c == "nsc_hardening":
+            want = r.params.get("want", "")
+            for cfg in nsc:
+                if want == "user_ca":
+                    for dom in cfg.get("domains", []):
+                        anchors = " ".join(
+                            str(x or "") for x in
+                            (dom.get("trust_anchors") or []))
+                        certs = " ".join(
+                            str(x or "") for x in
+                            (dom.get("certificates") or []))
+                        if "user" in (anchors + " " + certs).lower():
+                            out.append(R.finding(
+                                r, file=cfg.get("file", ""),
+                                evidence=(f'{cfg.get("file")}: user trust anchors in '
+                                          f'{dom.get("kind")} (allows user-installed CAs)'),
+                                extra={"domain": dom}))
+                elif want == "no_pinning":
+                    if cfg.get("pins"):
+                        continue
+                    has_pin = any(d.get("pinning") for d in cfg.get("domains", []))
+                    if not has_pin:
+                        out.append(R.finding(
+                            r, file=cfg.get("file", ""),
+                            evidence=(f'{cfg.get("file")}: network security config '
+                                      f"present but no <pin-set> (no pinning)"),
+                            extra={"file": cfg.get("file")}))
+        elif c == "backup_rules":
+            for br in (backup_rules or []):
+                if br.get("missing"):
+                    continue
+                if br.get("wide"):
+                    inc = ", ".join(
+                        f'{i.get("domain")}:{i.get("path") or "*"}'
+                        for i in br.get("includes", [])[:5])
+                    out.append(R.finding(
+                        r, file=br.get("file", ""),
+                        evidence=(f'{br.get("file")} backs up broadly '
+                                  f'({inc or "full/default"}) with no excludes'),
+                        extra={"rules": br}))
+        elif c == "risky_flags":
+            for flag in r.params.get("flags", []):
+                got = man.get("application", {}).get(flag)
+                if got is None:
+                    continue
+                bad = r.params.get("values", {}).get(flag, True)
+                if (bad is True and got is True) or (str(got).lower() == str(bad).lower()):
+                    out.append(R.finding(
+                        r, evidence=f"android:{flag}=\"{str(got).lower()}\"",
+                        extra={"flag": flag, "value": got}))
+    return out
+
+
+def _shannon(s: str) -> float:
+    """Shannon entropy in bits/char. Random base64 ~6, English ~4."""
+    import math
+    from collections import Counter
+    if not s:
+        return 0.0
+    freq = Counter(s)
+    n = len(s)
+    return -sum((c / n) * math.log2(c / n) for c in freq.values())
+
+
+# Third-party SDKs are out of scope (mobile-pentest: they belong to
+# Google/Firebase/Ads, not the target) and dominate scan time (61/65MB in
+# the reference APK). Skipped for every regex rule unless it opts back in
+# with params.include_vendor=true.
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-/+=]{20,}")
+_ENT_HINT_RE = re.compile(r"[=:\"']|key|secret|token|password|api[_-]?key|auth",
+                          re.I)
+VENDOR_PREFIXES = ("smali/android", "smali/androidx",
+                   "smali/com/google", "smali/com/googlecode",
+                   "smali/kotlin", "smali/kotlinx",
+                   "smali/okhttp3", "smali/okio",
+                   "smali/javax", "smali/org/apache",
+                   "smali/org/json", "smali/dagger",
+                   "smali/com/squareup", "smali/io/reactivex")
+
+_URL_RE = re.compile(r"https?://[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}", re.I)
+_KEY_RE = re.compile(r"(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}|"
+                     r"ghp_[A-Za-z0-9]{36}|sk_live_[A-Za-z0-9]{16,}|"
+                     r"xox[baprs]-[A-Za-z0-9\-]{10,})")
+
+
+def check_native(rules_by_id: dict, apk: str, limit: int = 25) -> list[dict]:
+    """Scan lib/**/*.so bytes for URLs + key shapes (no external `strings` needed).
+
+    Reuses AS-0021 (URLs) and AS-0016 (keys) rule metadata when present.
+    """
+    import zipfile
+    out: list[dict] = []
+    hits = 0
+    try:
+        with zipfile.ZipFile(apk) as z:
+            names = [n for n in z.namelist()
+                     if n.startswith("lib/") and n.endswith(".so")]
+            for n in names[:20]:
+                try:
+                    raw = z.read(n)
+                except Exception:
+                    continue
+                if len(raw) > 8_000_000:
+                    raw = raw[:8_000_000]
+                text = raw.decode("utf-8", "replace")
+                for m in _URL_RE.finditer(text):
+                    if "schemas.android.com" in m.group(0) or "w3.org" in m.group(0):
+                        continue
+                    r = rules_by_id.get("AS-0021")
+                    if r is None:
+                        break
+                    out.append(R.finding(
+                        r, file=n,
+                        evidence=f"{n}: native URL {m.group(0)[:120]}",
+                        extra={"native": True}))
+                    hits += 1
+                    if hits >= limit:
+                        break
+                for m in _KEY_RE.finditer(text):
+                    r = rules_by_id.get("AS-0016")
+                    if r is None:
+                        break
+                    out.append(R.finding(
+                        r, file=n,
+                        evidence=f"{n}: native key-shaped token {m.group(0)[:32]}…",
+                        extra={"native": True}))
+                    hits += 1
+                    if hits >= limit:
+                        break
+                if hits >= limit:
+                    break
+    except zipfile.BadZipFile:
+        pass
+    if hits >= limit and out:
+        for f in out:
+            f.setdefault("detail", {})["truncated"] = True
+        out[-1]["evidence"] += f" [truncated at {limit} hits]"
     return out
 
 
@@ -236,6 +425,10 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
     params.exts. This matters: a Java-source rule ("checkServerTrusted(") will
     never match smali (".method protected checkServerTrusted(...)V") and vice
     versa, and a rule that silently matches nothing is worse than no rule.
+
+    params.multiline=true reads the whole file with DOTALL (for smali
+    const-string + invoke pairs). params.entropy_min=4.5 additionally flags
+    high-entropy tokens (>=20 chars) as possible secrets.
     """
     out: list[dict] = []
     if not decoded or not os.path.isdir(decoded):
@@ -245,8 +438,9 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
         pat = r.params.get("pattern")
         if not pat:
             continue
+        flags = re.I | (re.DOTALL if r.params.get("multiline") else 0)
         try:
-            rx = re.compile(pat, re.I)
+            rx = re.compile(pat, flags)
         except re.error as e:
             out.append(R.finding(r, evidence=f"bad regex in rule: {e}"))
             continue
@@ -255,24 +449,71 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
             continue
         exts = {e.lower() if e.startswith(".") else "." + e.lower()
                 for e in r.params.get("exts", default_exts)}
+        ent_min = float(r.params.get("entropy_min", 0) or 0)
+        skip_dirs = set(r.params.get("skip_dirs", []))
+        # Entropy is for config tokens, not code: scanning 60MB of smali
+        # with Shannon per token is what blew the 5-min budget on-phone.
+        ent_exts = {".xml", ".json", ".txt", ".properties", ".gradle",
+                    ".yml", ".yaml"}
+        include_vendor = bool(r.params.get("include_vendor", False))
         hits = 0
         start = len(out)
+        multiline = bool(r.params.get("multiline"))
         for dirpath, dirnames, files in os.walk(base):
-            dirnames[:] = [d for d in dirnames if not d.startswith(".")]
+            rel = os.path.relpath(dirpath, base)
+            if not include_vendor and any(
+                    rel == vp or rel.startswith(vp + os.sep)
+                    for vp in VENDOR_PREFIXES):
+                dirnames[:] = []
+                continue
+            dirnames[:] = [d for d in dirnames
+                           if not d.startswith(".") and d not in skip_dirs]
+            if any(part in skip_dirs for part in rel.split(os.sep)):
+                continue
             for fn in files:
                 if os.path.splitext(fn)[1].lower() not in exts:
                     continue
                 p = os.path.join(dirpath, fn)
                 try:
                     with open(p, encoding="utf-8", errors="replace") as fh:
-                        for ln, line in enumerate(fh, 1):
-                            if rx.search(line):
+                        if multiline:
+                            content = fh.read(500_000)
+                            m = rx.search(content)
+                            if m:
                                 rel = os.path.relpath(p, decoded)
                                 out.append(R.finding(
                                     r, file=rel,
-                                    evidence=f"{rel}:{ln}: {line.strip()[:200]}",
-                                    extra={"line": ln}))
+                                    evidence=f"{rel}: {m.group(0)[:200]}",
+                                    extra={"multiline": True}))
                                 hits += 1
+                        else:
+                            for ln, line in enumerate(fh, 1):
+                                if rx.search(line):
+                                    rel = os.path.relpath(p, decoded)
+                                    out.append(R.finding(
+                                        r, file=rel,
+                                        evidence=f"{rel}:{ln}: {line.strip()[:200]}",
+                                        extra={"line": ln}))
+                                    hits += 1
+                                    if hits >= limit:
+                                        break
+                                elif (ent_min and len(line) < 20_000
+                                        and _ENT_HINT_RE.search(line)
+                                        and os.path.splitext(fn)[1].lower() in ent_exts):
+                                    for tok in _TOKEN_RE.findall(line):
+                                        if len(tok) >= 20:
+                                            h = _shannon(tok)
+                                            if h >= ent_min:
+                                                rel = os.path.relpath(p, decoded)
+                                                out.append(R.finding(
+                                                    r, file=rel,
+                                                    evidence=(f"{rel}:{ln}: high-entropy token "
+                                                              f"{tok[:24]}… (H={h:.1f})"),
+                                                    extra={"line": ln, "entropy": round(h, 2)}))
+                                                hits += 1
+                                                break
+                                    if hits >= limit:
+                                        break
                                 if hits >= limit:
                                     break
                 except OSError:
@@ -367,7 +608,10 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     if decoded_ok and man:
         file_paths = mf.read_file_provider_paths(decode_dir) if (
             decoded_ok and not blind_code) else []
-        findings += check_manifest(all_rules, man, nsc, platform, file_paths)
+        backup_rules = mf.read_backup_rules(decode_dir, man) if (
+            decoded_ok and not blind_code) else []
+        findings += check_manifest(all_rules, man, nsc, platform, file_paths,
+                                   sig, backup_rules)
         if blind_code:
             findings.append({
                 "id": "BLIND-0003", "tool": "apk-surface", "rule": "BLIND-0003",
@@ -383,6 +627,9 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         if do_regex and not packed and not blind_code:
             findings += check_regex([r for r in all_rules if r.kind == "regex"],
                                     decode_dir)
+            by_id = {r.id: r for r in all_rules}
+            if st.get("so_files"):
+                findings += check_native(by_id, apk)
         elif do_regex and (packed or blind_code):
             findings.append({
                 "id": "BLIND-0002", "tool": "apk-surface", "rule": "BLIND-0002",
@@ -422,6 +669,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         "custom_schemes": man.get("custom_schemes", []),
         "meta_data": man.get("meta_data", []),
         "file_provider_paths": file_paths if decoded_ok and man else [],
+        "backup_rules": backup_rules if decoded_ok and man else [],
         "network_security_config": nsc,
         "signature": sig,
         "structure": st,

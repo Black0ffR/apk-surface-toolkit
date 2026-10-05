@@ -1,0 +1,11 @@
+{
+  "id": "AS-0031",
+  "title": "Backup rules grant broad restore",
+  "kind": "manifest",
+  "check": "backup_rules",
+  "severity": "low",
+  "maswe": "MASWE-0006",
+  "tags": ["storage", "backup"],
+  "recommendation": "Physical-access precondition. Narrow fullBackupContent/dataExtractionRules <include> domains, add <exclude> for tokens/DBs.",
+  "repro": "cat {file}"
+}

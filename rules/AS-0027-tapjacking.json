@@ -1,0 +1,11 @@
+{
+  "id": "AS-0027",
+  "title": "Exported activities need tapjacking review",
+  "kind": "manifest",
+  "check": "tapjacking",
+  "severity": "info",
+  "maswe": "MASWE-0038",
+  "tags": ["ui", "tapjacking", "overlay"],
+  "recommendation": "Verify overlay handling on sensitive actions: filterTouchesWhenObscured=true / FLAG_WINDOW_IS_OBSCURED. Test with an overlay app before reporting.",
+  "repro": "draw overlay, then tap the exported activity"
+}

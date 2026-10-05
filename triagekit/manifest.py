@@ -161,6 +161,10 @@ def parse(manifest_path: str) -> dict:
                 "grant_uri_permissions": _b(el, "grantUriPermissions"),
                 "authorities": _attr(el, "authorities"),
                 "enabled": _b(el, "enabled"),
+                "task_affinity": _attr(el, "taskAffinity") or "",
+                "launch_mode": _attr(el, "launchMode") or "",
+                "allow_task_reparenting": _b(el, "allowTaskReparenting"),
+                "exclude_from_recents": _b(el, "excludeFromRecents"),
                 "intent_filters": filters,
             }
             empty["components"].append(comp)
@@ -330,4 +334,55 @@ def read_file_provider_paths(decoded_dir: str) -> list[dict]:
                     for e in entries)
         out.append({"file": f"res/xml/{fn}", "entries": entries,
                     "risky": risky})
+    return out
+
+
+def _resolve_backup_ref(ref: str) -> str:
+    """@xml/foo -> res/xml/foo.xml. Returns '' when unresolvable."""
+    if not ref:
+        return ""
+    m = re.match(r"@xml/(.+)", ref)
+    return f"res/xml/{m.group(1)}.xml" if m else ""
+
+
+def read_backup_rules(decoded_dir: str, man: dict) -> list[dict]:
+    """Parse fullBackupContent / dataExtractionRules targets.
+
+    Returns [{file, includes:[...], excludes:[...], wide:bool}].
+    wide = includes everything (full-backup / all-files) with no excludes.
+    """
+    out = []
+    app_flags = (man.get("application") or {}) if isinstance(man, dict) else {}
+    refs = [app_flags.get("fullBackupContent", ""),
+            app_flags.get("dataExtractionRules", "")]
+    seen = set()
+    for ref in refs:
+        rel = _resolve_backup_ref(str(ref or ""))
+        if not rel or rel in seen:
+            continue
+        seen.add(rel)
+        p = os.path.join(decoded_dir, rel)
+        if not os.path.isfile(p):
+            out.append({"file": rel, "missing": True, "includes": [],
+                        "excludes": [], "wide": False})
+            continue
+        try:
+            root = ET.parse(p).getroot()
+        except ET.ParseError:
+            continue
+        includes, excludes = [], []
+        for el in root.iter():
+            if el.tag == "include":
+                includes.append({"domain": el.get("domain") or "",
+                                 "path": el.get("path") or ""})
+            elif el.tag == "exclude":
+                excludes.append({"domain": el.get("domain") or "",
+                                 "path": el.get("path") or ""})
+        wide = (not excludes and any(
+            i.get("domain") in ("file", "database", "sharedpref",
+                                "external", "root") and i.get("path") in
+            (".", "", "/", None) for i in includes)) or (
+            not includes and not excludes)
+        out.append({"file": rel, "includes": includes, "excludes": excludes,
+                    "wide": wide})
     return out

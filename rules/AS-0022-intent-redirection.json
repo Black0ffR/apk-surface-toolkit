@@ -5,11 +5,22 @@
   "check": "regex",
   "severity": "medium",
   "maswe": "MASWE-0032",
-  "tags": ["ipc", "intent-redirection"],
+  "tags": [
+    "ipc",
+    "intent-redirection"
+  ],
   "params": {
     "root": ".",
     "pattern": "getParcelableExtra|getSerializableExtra|getIntent\\(\\)\\.get.*Extra|startActivity.*Extra|sendBroadcast.*Extra|setClass.*get.*Extra",
-    "exts": [".java", ".kt", ".smali"]
+    "exts": [
+      ".java",
+      ".kt",
+      ".smali"
+    ],
+    "skip_dirs": [
+      "res",
+      "assets"
+    ]
   },
   "recommendation": "Trace whether an attacker-controlled extra selects the target component/action/file. Prove with a redirect payload that reaches an internal activity or file.",
   "repro": "am start -n {package}/{component} --es redirect <internal>"

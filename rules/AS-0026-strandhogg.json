@@ -1,0 +1,12 @@
+{
+  "id": "AS-0026",
+  "title": "Task-hijacking candidate (StrandHogg)",
+  "kind": "manifest",
+  "check": "strandhogg",
+  "severity": "medium",
+  "maswe": "MASWE-0038",
+  "tags": ["task", "phishing", "platform"],
+  "params": {"modes": ["singleTask", "singleInstance"]},
+  "recommendation": "Needs an attacker app installed (phishing). Mitigate: empty taskAffinity=\"\" and avoid singleTask/singleInstance on exported activities unless required.",
+  "repro": "install a PoC app with matching taskAffinity, then launch {component}"
+}

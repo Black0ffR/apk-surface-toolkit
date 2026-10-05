@@ -1,0 +1,11 @@
+{
+  "id": "AS-0028",
+  "title": "Weak APK signature (v1-only/Janus or debug cert)",
+  "kind": "manifest",
+  "check": "sig_verdict",
+  "severity": "medium",
+  "maswe": "MASWE-0052",
+  "tags": ["signature", "integrity", "janus"],
+  "recommendation": "Sign with v2/v3 (apksigner), raise minSdk past 27 where possible, never ship debug certs. Janus needs trojanized install + API 21-27 — low urgency today.",
+  "repro": "apksigner verify --verbose --print-certs {apk}"
+}

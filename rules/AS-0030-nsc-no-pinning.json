@@ -1,0 +1,12 @@
+{
+  "id": "AS-0030",
+  "title": "Network security config without pinning",
+  "kind": "manifest",
+  "check": "nsc_hardening",
+  "severity": "info",
+  "maswe": "MASWE-0027",
+  "tags": ["network", "tls", "pinning"],
+  "params": {"want": "no_pinning"},
+  "recommendation": "No <pin-set> present. Pinning is defense-in-depth (breaks with rotation) — note it, don't report absence alone.",
+  "repro": "cat {file}"
+}

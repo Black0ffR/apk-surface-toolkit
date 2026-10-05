@@ -135,6 +135,54 @@ def render(r: dict) -> str:
     exported = [c for c in comps if c.get("exported")]
     L.append(f"\n{len(exported)} of {len(comps)} components are exported.\n")
 
+    # ---- task affinity (StrandHogg surface)
+    aff = [c for c in comps if (c.get("task_affinity") or "")
+           and c.get("type") in ("activity", "activity-alias")]
+    if aff:
+        L.append("## Task affinity")
+        L.append("")
+        L.append(_tbl(["Component", "taskAffinity", "launchMode", "reparent"],
+                      [[f"`{c['name']}`", c.get("task_affinity") or "—",
+                        c.get("launch_mode") or "—",
+                        _b(c.get("allow_task_reparenting"))]
+                       for c in aff]))
+        L.append("")
+
+    # ---- meta-data
+    if r.get("meta_data"):
+        L.append("## Manifest meta-data")
+        L.append("")
+        L.append(_tbl(["Name", "Value"],
+                      [[f"`{m['name']}`", str(m.get("value", ""))[:100]]
+                       for m in r["meta_data"]]))
+        L.append("")
+
+    # ---- file-provider paths
+    if r.get("file_provider_paths"):
+        L.append("## FileProvider paths")
+        L.append("")
+        for fp in r["file_provider_paths"]:
+            L.append(f"**{fp.get('file')}**{' (BROAD)' if fp.get('risky') else ''}")
+            L.append("")
+            L.append(_tbl(["Tag", "Name", "Path"],
+                          [[e["tag"], e.get("name") or "—", e.get("path") or "—"]
+                           for e in fp.get("entries", [])]))
+            L.append("")
+
+    # ---- backup rules
+    if r.get("backup_rules"):
+        L.append("## Backup rules")
+        L.append("")
+        for br in r["backup_rules"]:
+            L.append(f"**{br.get('file')}**{' (WIDE)' if br.get('wide') else ''}")
+            L.append("")
+            L.append(_tbl(["Include/Exclude", "Domain", "Path"],
+                          [["include", i.get("domain"), i.get("path")]
+                           for i in br.get("includes", [])] +
+                          [["exclude", e.get("domain"), e.get("path")]
+                           for e in br.get("excludes", [])]))
+            L.append("")
+
     # ---- deep links
     L.append("## Deep links")
     L.append("")

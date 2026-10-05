@@ -16,7 +16,11 @@
       ".kt",
       ".smali"
     ],
-    "pattern": "class\\s+\\w*TrustManager\\w*|void\\s+checkServerTrusted\\s*\\([^)]*\\)\\s*\\{\\s*\\}|\\.method.*checkServerTrusted|X509TrustManager"
+    "pattern": "class\\s+\\w*TrustManager\\w*|void\\s+checkServerTrusted\\s*\\([^)]*\\)\\s*\\{\\s*\\}|\\.method.*checkServerTrusted|X509TrustManager",
+    "skip_dirs": [
+      "res",
+      "assets"
+    ]
   },
   "recommendation": "An empty checkServerTrusted body accepts every certificate. Delete the override.",
   "repro": "run with hooklib: load the ssl module"

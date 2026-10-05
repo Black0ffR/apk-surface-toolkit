@@ -4,7 +4,11 @@
   "kind": "regex",
   "params": {
     "root": ".",
-    "pattern": "DexClassLoader|PathClassLoader|InMemoryDexClassLoader|dalvik\\.system\\.DexClassLoader|loadClass\\("
+    "pattern": "DexClassLoader|PathClassLoader|InMemoryDexClassLoader|dalvik\\.system\\.DexClassLoader|loadClass\\(",
+    "skip_dirs": [
+      "res",
+      "assets"
+    ]
   },
   "severity": "low",
   "maswe": "MASWE-0049",

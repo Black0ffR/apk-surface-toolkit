@@ -4,7 +4,11 @@
   "kind": "regex",
   "params": {
     "root": ".",
-    "pattern": "addJavascriptInterface|@JavascriptInterface"
+    "pattern": "addJavascriptInterface|@JavascriptInterface",
+    "skip_dirs": [
+      "res",
+      "assets"
+    ]
   },
   "severity": "high",
   "maswe": "MASWE-0035",
