@@ -130,6 +130,16 @@ def generate(r: dict, path: str) -> str:
     else:
         L.append('echo "(no deep links)"\n')
 
+    taints = [f for f in (r.get("findings") or [])
+              if f.get("rule") in ("AS-0033", "AS-0034")]
+    if taints:
+        L.append('# ------------------------------------------------- taint sinks (verify live)')
+        for f in taints[:10]:
+            det = f.get("detail") or {}
+            L.append(f'# {f["rule"]} {det.get("sink", "")} via {det.get("reg", "")} in {det.get("method", "")[:80]}')
+            L.append(f'# file: {f.get("file", "")}')
+        L.append("")
+
     L.append('# ---------------------------------------------------------------- misc probes')
     L.append('echo "--- task hijacking / tapjacking (need attacker app + overlay)"')
     L.append(f'# strandhogg: install PoC app with same taskAffinity, then: am start -n {pkg}/<exported-activity>')
