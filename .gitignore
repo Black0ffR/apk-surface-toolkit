@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+out/
+re/projects/
+findings.jsonl
+*.apk
+*.apkm
+*.xapk
+.apktool/

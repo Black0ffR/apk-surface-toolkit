@@ -1,0 +1,21 @@
+{
+  "id": "AS-0003",
+  "title": "Content provider exposure worth reviewing",
+  "kind": "manifest",
+  "check": "provider_exposed",
+  "severity": "high",
+  "maswe": "MASWE-0008",
+  "tags": [
+    "ipc",
+    "provider"
+  ],
+  "recommendation": "Exported + no read permission is a real data-leak primitive. grantUriPermissions on a non-exported provider is the normal FileProvider pattern - check the paths XML instead. Verify res/xml/*paths*.xml covers only what you intend.",
+  "repro": "content query --uri \"content://{authority}\"",
+  "params": {
+    "file_provider_classes": [
+      "FileProvider"
+    ],
+    "file_provider_severity": "info",
+    "nonexported_grant_severity": "info"
+  }
+}

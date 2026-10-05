@@ -1,0 +1,11 @@
+{
+  "id": "AS-0018",
+  "title": "Legacy external storage requested",
+  "kind": "manifest",
+  "check": "flag",
+  "params": { "flag": "requestLegacyExternalStorage", "value": true },
+  "severity": "low",
+  "maswe": "MASWE-0001",
+  "tags": ["storage", "android"],
+  "recommendation": "Scoped storage is the default from API 29. Opting back in widens what other apps can read."
+}

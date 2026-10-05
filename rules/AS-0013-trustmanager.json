@@ -1,0 +1,23 @@
+{
+  "id": "AS-0013",
+  "title": "Custom or permissive TrustManager / HostnameVerifier",
+  "kind": "regex",
+  "params": {
+    "root": ".",
+    "pattern": "checkServerTrusted\\s*\\(|ALLOW_ALL_HOSTNAME_VERIFIER|setHostnameVerifier|X509TrustManager",
+    "exts": [
+      ".java",
+      ".kt",
+      ".smali"
+    ]
+  },
+  "severity": "high",
+  "maswe": "MASWE-0027",
+  "tags": [
+    "network",
+    "tls",
+    "java"
+  ],
+  "recommendation": "Inspect the implementation: an empty checkServerTrusted body accepts any certificate. Remove it and rely on the platform trust store plus pinning.",
+  "repro": "run with hooklib: load the ssl module"
+}

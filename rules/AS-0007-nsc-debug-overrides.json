@@ -1,0 +1,12 @@
+{
+  "id": "AS-0007",
+  "title": "Network security config ships debug-overrides",
+  "kind": "manifest",
+  "check": "nsc",
+  "params": { "want": "debug_overrides" },
+  "severity": "medium",
+  "maswe": "MASWE-0027",
+  "tags": ["network", "config"],
+  "recommendation": "<debug-overrides> in a shipped config widens trust (often to user-installed CAs). Strip it from release builds.",
+  "repro": "cat {file}"
+}

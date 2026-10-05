@@ -1,0 +1,228 @@
+#!/usr/bin/env python3
+"""capdoctor — what can THIS phone actually do?
+
+Pure Termux. No network, no app permissions, no root. Reads only its own
+environment and the Termux package database.
+
+    capdoctor            full report
+    capdoctor --tools    tool matrix only
+    capdoctor --json     machine readable
+    capdoctor --recipe   print the recommended workflow
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import platform
+import shutil
+import subprocess
+import sys
+
+PREFIX = os.environ.get("PREFIX", "/data/data/com.termux/files/usr")
+
+# tier: ok = works here | cond = works with a caveat | no = will not work
+TOOLS = [
+    # name,             pkg,                       tier, note
+    ("apktool",         "apktool",                 "ok",   "APK decode/rebuild"),
+    ("aapt2",           "aapt2",                   "ok",   "manifest/resource dump (SDK<=34)"),
+    ("aapt",            "aapt",                    "ok",   "legacy resource tool"),
+    ("apksigner",       "apksigner",               "ok",   "sign + verify"),
+    ("zipalign",        "zipalign",                "cond", "not always packaged; apktool b may cover it"),
+    ("d8",              "d8",                      "ok",   "class -> dex"),
+    ("dx",              "dx",                      "ok",   "class -> dex (legacy)"),
+    ("dex2jar",         "dex2jar",                 "ok",   "dex -> jar"),
+    ("r2",              "radare2",                 "ok",   "native .so analysis"),
+    ("jadx",            None,                      "cond", "not a Termux pkg - use the release zip + openjdk"),
+    ("java",            "openjdk-21",              "ok",   "jadx / LSPatch / CFR"),
+    ("python",          "python",                  "ok",   "androguard, frida-tools, mobsfscan"),
+    ("frida",           None,                      "cond", "pip + frida-core devkit; >=14.2.10 supports Termux"),
+    ("objection",       None,                      "no",   "broken on Termux (sensepost#296)"),
+    ("mitmproxy",       None,                      "cond", "pip install; needs a CA installed on the target"),
+    ("adb",             "android-tools",           "ok",   "wireless debugging, device-to-device"),
+    ("mobsf",           None,                      "no",   "needs Docker + rooted VM <= API 30"),
+    ("ghidra",          None,                      "no",   "use a remote box or cloud VM"),
+    ("quark-engine",    None,                      "cond", "pip install; androguard core, heavy on a phone"),
+    ("mobsfscan",       None,                      "cond", "pip install; SOURCE code only, not binaries"),
+    ("zipalign-bin",    "zipalign",                "cond", "see zipalign above"),
+    ("code-server",     "code-server",             "cond", "needs tur-repo; server-side extensions blocked on Android"),
+    ("neovim",          "neovim",                  "ok",   "editor + LSP"),
+    ("proot-distro",    "proot-distro",            "ok",   "full Debian/Ubuntu, no root"),
+    ("claude",          None,                      "ok",   "CLI agent; optional"),
+    ("gh",              "gh",                      "ok",   "for coordinated disclosure"),
+]
+
+X11_BINARIES = ["termux-x11", "Xfce", "xfce4-session"]
+
+
+def sh(cmd: list[str], timeout: int = 25) -> tuple[int, str]:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout or p.stderr).strip()
+    except FileNotFoundError:
+        return 127, "not found"
+    except subprocess.TimeoutExpired:
+        return 124, "timed out"
+    except Exception as e:  # noqa: BLE001
+        return 1, str(e)
+
+
+def android_api() -> str:
+    rc, out = sh(["getprop", "ro.build.version.sdk"])
+    return out if rc == 0 and out.isdigit() else "unknown"
+
+
+def has_root() -> str:
+    """Report root *availability* without popping a root prompt.
+
+    `which su` is a hint, not proof: some Android builds ship a `su` stub in PATH
+    that is not real root. Probing it for real (su -c id) can raise a system root
+    dialog, which is not something a diagnostic tool should do unprompted — hence
+    --deep.
+    """
+    su = shutil.which("su") or shutil.which("tsu")
+    if not su:
+        return "absent"
+    if globals().get("_DEEP"):
+        rc, out = sh([su, "-c", "id"], timeout=10)
+        if rc == 0 and "uid=0" in out:
+            return f"yes ({out})"
+        return f"unconfirmed — {su} present but su -c id failed (stub or denied)"
+    return f"su present at {su} (unconfirmed — run --deep to verify without a prompt)"
+
+
+def storage_exec() -> str:
+    for cand in ("/sdcard", "/storage/emulated/0"):
+        if os.path.isdir(cand):
+            rc, out = sh(["findmnt", "-no", "OPTIONS", cand])
+            if rc != 0:
+                return f"unknown (findmnt unavailable: {out or rc})"
+            return "noexec (expected - keep projects under $HOME)" if "noexec" in out else "exec"
+    return "storage not mounted"
+
+
+def java_ver() -> str:
+    if not shutil.which("java"):
+        return "absent"
+    rc, out = sh(["java", "-version"], timeout=20)
+    first = out.splitlines()[0] if out else ""
+    return first.replace('"', "").strip() or "present"
+
+
+def x11_status() -> str:
+    if os.environ.get("DISPLAY"):
+        return f"DISPLAY={os.environ['DISPLAY']} (session active)"
+    if shutil.which("termux-x11"):
+        return "installed but not running (no DISPLAY)"
+    return "absent (pkg install x11-repo && pkg install termux-x11-nightly)"
+
+
+def collect() -> dict:
+    d = {
+        "arch": platform.machine(),
+        "android_api": android_api(),
+        "python": platform.python_version(),
+        "java": java_ver(),
+        "root": has_root(),
+        "storage": storage_exec(),
+        "x11": x11_status(),
+        "proot": bool(shutil.which("proot-distro")),
+        "prefix": PREFIX,
+    }
+    tools = []
+    for name, pkg, tier, note in TOOLS:
+        if name == "zipalign-bin":
+            continue
+        path = shutil.which(name)
+        tools.append({"tool": name, "pkg": pkg, "tier": tier if path else "no",
+                      "present": bool(path), "path": path, "note": note})
+    d["tools"] = tools
+    return d
+
+
+def recipe(d: dict) -> str:
+    has_root = str(d["root"]).startswith("yes")
+    x11 = d["x11"].startswith("DISPLAY") or d["x11"].startswith("installed")
+    lines = ["Your workflow on this device:", ""]
+    lines.append("  1. capdoctor -> triage -> jadx/apktool -> patch -> apksigner -> termux-open")
+    lines.append("")
+    if d["tools"] and next((t for t in d["tools"] if t["tool"] == "apktool" and t["present"]), None):
+        lines.append("  [ok] static analysis: apktool + aapt2 + jadx are ready")
+    else:
+        lines.append("  [!!] install the static trio:  pkg install apktool aapt2 jadx-ish(openjdk-21)")
+    if has_root:
+        lines.append("  [ok] root detected -> frida-server, Magisk/Zygisk + LSPosed, full dumps")
+    else:
+        lines.append("  [--] no root -> use frida spawn mode + Frida Gadget + LSPatch (rootless)")
+    if x11:
+        lines.append("  [ok] X11 session -> jadx-gui on screen")
+    else:
+        lines.append("  [--] no X11 -> run jadx CLI, or install Termux:X11 for the GUI")
+    if d["proot"]:
+        lines.append("  [ok] proot-distro available -> full Debian for unsupported tooling")
+    else:
+        lines.append("  [--] no proot -> pkg install proot-distro for a real Linux userland")
+    lines.append("")
+    lines.append("  blocked here, on any phone:  MobSF (Docker+rooted VM) | objection | Ghidra/IDA")
+    lines.append("  batch tip:  point the tools at a directory and let them run overnight.")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(prog="capdoctor", description="Device capability doctor for Termux")
+    ap.add_argument("--json", action="store_true", help="machine readable output")
+    ap.add_argument("--tools", action="store_true", help="tool matrix only")
+    ap.add_argument("--recipe", action="store_true", help="print the recommended workflow only")
+    ap.add_argument("--deep", action="store_true", help="actually probe su (may raise a root prompt)")
+    a = ap.parse_args()
+
+    globals()["_DEEP"] = a.deep
+    d = collect()
+
+    if a.json:
+        print(json.dumps(d, indent=2))
+        return 0
+
+    if a.recipe:
+        print(recipe(d))
+        return 0
+
+    if a.tools:
+        print(f"{'tool':<14}{'state':<8}{'pkg':<20}note")
+        print("-" * 92)
+        for t in d["tools"]:
+            state = "OK" if t["present"] else "MISSING"
+            print(f"{t['tool']:<14}{state:<8}{(t['pkg'] or '-'):<20}{t['note']}")
+        print()
+        return 0
+
+    print("=" * 66)
+    print(" capdoctor - Termux capability report")
+    print("=" * 66)
+    print(f"  arch            {d['arch']}")
+    print(f"  android API     {d['android_api']}")
+    print(f"  python          {d['python']}")
+    print(f"  java            {d['java']}")
+    print(f"  root            {d['root']}")
+    print(f"  storage         {d['storage']}")
+    print(f"  x11             {d['x11']}")
+    print(f"  proot-distro    {d['proot']}")
+    print()
+
+    groups = [("ok", "READY"), ("cond", "CONDITIONAL"), ("no", "UNAVAILABLE / BLOCKED")]
+    for tier, label in groups:
+        rows = [t for t in d["tools"] if (t["tier"] if t["present"] else "no") == tier]
+        if not rows:
+            continue
+        print(f"  {label}")
+        for t in rows:
+            mark = "+" if t["present"] else "-"
+            print(f"    {mark} {t['tool']:<14}{(t['pkg'] or '-'):<18}{t['note']}")
+        print()
+
+    print(recipe(d))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

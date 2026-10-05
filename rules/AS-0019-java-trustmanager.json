@@ -1,0 +1,22 @@
+{
+  "id": "AS-0019",
+  "title": "TrustManager override with an empty checkServerTrusted body",
+  "kind": "regex",
+  "severity": "critical",
+  "maswe": "MASWE-0027",
+  "tags": [
+    "network",
+    "tls",
+    "java"
+  ],
+  "params": {
+    "root": ".",
+    "exts": [
+      ".java",
+      ".kt"
+    ],
+    "pattern": "class\\s+\\w*TrustManager\\w*|void\\s+checkServerTrusted\\s*\\([^)]*\\)\\s*\\{\\s*\\}"
+  },
+  "recommendation": "An empty checkServerTrusted body accepts every certificate. Delete the override.",
+  "repro": "run with hooklib: load the ssl module"
+}

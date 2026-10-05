@@ -1,0 +1,10 @@
+{
+  "id": "AS-0010",
+  "title": "HTTP(S) deep link without autoVerify",
+  "kind": "manifest",
+  "check": "deeplink_unverified",
+  "severity": "info",
+  "maswe": "MASWE-0029",
+  "tags": ["deeplink", "app-links"],
+  "recommendation": "Add android:autoVerify=\"true\" to the intent-filter and host an assetlinks.json, or treat the link as untrusted input."
+}

@@ -1,0 +1,11 @@
+{
+  "id": "AS-0009",
+  "title": "Custom URL scheme accepts external intents",
+  "kind": "manifest",
+  "check": "custom_scheme",
+  "severity": "low",
+  "maswe": "MASWE-0029",
+  "tags": ["deeplink", "ipc"],
+  "recommendation": "Any app can invoke this scheme. Validate every parameter and never trust the URI as an authorisation decision.",
+  "repro": "am start -W -a android.intent.action.VIEW -d \"{scheme}://{host}probe?x=1\" {package}"
+}

@@ -1,0 +1,11 @@
+{
+  "id": "AS-0006",
+  "title": "Cleartext HTTP traffic is permitted",
+  "kind": "manifest",
+  "check": "flag",
+  "params": { "flag": "usesCleartextTraffic", "value": true },
+  "severity": "medium",
+  "maswe": "MASWE-0026",
+  "tags": ["network"],
+  "recommendation": "Remove usesCleartextTraffic and enforce TLS in the network security config."
+}

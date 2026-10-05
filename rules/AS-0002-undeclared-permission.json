@@ -1,0 +1,11 @@
+{
+  "id": "AS-0002",
+  "title": "Component permission is never declared by this app",
+  "kind": "manifest",
+  "check": "undeclared_permission",
+  "severity": "high",
+  "maswe": "MASWE-0008",
+  "tags": ["ipc", "permission", "android"],
+  "recommendation": "Declare the permission in this app's own <permission> element, or use a platform permission that genuinely exists. Any app can declare the same permission string and inherit the grant.",
+  "repro": "am start -W -n {package}/{component}"
+}

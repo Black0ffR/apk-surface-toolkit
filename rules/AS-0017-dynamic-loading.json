@@ -1,0 +1,10 @@
+{
+  "id": "AS-0017",
+  "title": "Dynamic code loading",
+  "kind": "regex",
+  "params": { "root": ".", "pattern": "DexClassLoader|PathClassLoader|InMemoryDexClassLoader|dalvik\\.system\\.DexClassLoader|loadClass\\(" },
+  "severity": "low",
+  "maswe": "MASWE-0010",
+  "tags": ["loader", "packer", "java"],
+  "recommendation": "Confirm the source of the loaded code is verified (signature check) and not attacker-reachable, e.g. external storage or a network response."
+}

@@ -1,0 +1,22 @@
+{
+  "id": "AS-0015",
+  "title": "Weak or ECB-mode cryptography",
+  "kind": "regex",
+  "params": {
+    "root": ".",
+    "pattern": "Cipher\\.getInstance\\(\\s*\"(AES|DES|DESede|RC2|RC4|Blowfish)\"(\\s*/\\s*ECB[^/]*)?\"|\"(DES|DESede|RC4)\"|Cipher\\.getInstance\\(\\s*\"[A-Z0-9-]+\"\\s*,\\s*\"[A-Z0-9-]+\"\\s*,\\s*\"(ECB|GCM)\"",
+    "exts": [
+      ".java",
+      ".kt",
+      ".smali"
+    ]
+  },
+  "severity": "medium",
+  "maswe": "MASWE-0007",
+  "tags": [
+    "crypto",
+    "java"
+  ],
+  "recommendation": "Use an AEAD mode (AES/GCM/NoPadding) with a random IV. A bare mode string defaults to ECB/PKCS5Padding and is deterministic.",
+  "repro": "run with hooklib: load the crypto module"
+}

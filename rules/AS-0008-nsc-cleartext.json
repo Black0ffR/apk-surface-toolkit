@@ -1,0 +1,11 @@
+{
+  "id": "AS-0008",
+  "title": "Network security config permits cleartext",
+  "kind": "manifest",
+  "check": "nsc",
+  "params": { "want": "cleartext" },
+  "severity": "medium",
+  "maswe": "MASWE-0026",
+  "tags": ["network", "config"],
+  "recommendation": "Set cleartextTrafficPermitted=\"false\" unless a specific legacy host genuinely requires HTTP."
+}

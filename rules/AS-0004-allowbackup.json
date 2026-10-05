@@ -1,0 +1,12 @@
+{
+  "id": "AS-0004",
+  "title": "Application data is backup-eligible",
+  "kind": "manifest",
+  "check": "flag",
+  "params": { "flag": "allowBackup", "value": true },
+  "severity": "low",
+  "maswe": "MASWE-0001",
+  "tags": ["storage"],
+  "recommendation": "Set android:allowBackup=\"false\", or exclude sensitive files via dataExtractionRules/fullBackupContent.",
+  "repro": "adb backup -apk -shared {package}"
+}

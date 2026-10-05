@@ -1,0 +1,13 @@
+{
+  "id": "AS-0011",
+  "title": "Sensitive runtime permissions requested (aggregated)",
+  "kind": "manifest",
+  "check": "dangerous_permission",
+  "severity": "info",
+  "maswe": "MASWE-0018",
+  "tags": [
+    "privacy",
+    "permission"
+  ],
+  "recommendation": "Confirm the app justifies this permission for its stated function, and that it degrades gracefully when denied."
+}

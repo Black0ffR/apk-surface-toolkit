@@ -1,0 +1,11 @@
+{
+  "id": "AS-0001",
+  "title": "Exported component with no permission",
+  "kind": "manifest",
+  "check": "unprotected_exported",
+  "severity": "medium",
+  "maswe": "MASWE-0008",
+  "tags": ["ipc", "android"],
+  "recommendation": "Set android:permission, or set android:exported=\"false\" if no third party needs it.",
+  "repro": "am start -W -n {package}/{component}"
+}

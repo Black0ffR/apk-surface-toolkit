@@ -1,0 +1,10 @@
+{
+  "id": "AS-0012",
+  "title": "Custom permission declared without signature protection",
+  "kind": "manifest",
+  "check": "custom_permission_weak",
+  "severity": "low",
+  "maswe": "MASWE-0008",
+  "tags": ["permission", "android"],
+  "recommendation": "Use protectionLevel=\"signature\" so only apps signed with the same key can hold the permission."
+}
