@@ -625,8 +625,10 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
                 "verification": {"status": "n/a", "script": None},
             })
         if do_regex and not packed and not blind_code:
+            from . import taint_smali as TS  # local: taint_smali imports VENDOR_PREFIXES from here
             findings += check_regex([r for r in all_rules if r.kind == "regex"],
                                     decode_dir)
+            findings += TS.scan(decode_dir, [r for r in all_rules if r.kind == "smali-taint"])
             by_id = {r.id: r for r in all_rules}
             if st.get("so_files"):
                 findings += check_native(by_id, apk)
@@ -635,7 +637,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
                 "id": "BLIND-0002", "tool": "apk-surface", "rule": "BLIND-0002",
                 "title": "Regex rules skipped (sample is packed)",
                 "severity": "info", "kind": "integrity", "component": "", "file": "",
-                "evidence": f"{len([r for r in all_rules if r.kind == 'regex'])} regex rules not run "
+                "evidence": f"{len([r for r in all_rules if r.kind in ('regex', 'smali-taint')])} code rules not run "
                             f"({'packed' if packed else 'manifest-only decode'})",
                 "recommendation": "Unpack first, then re-run.",
                 "maswe": None, "static_only": True,
