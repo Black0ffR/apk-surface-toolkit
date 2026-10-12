@@ -426,13 +426,36 @@ _KEY_RE = re.compile(r"(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}
 
 
 def check_native(rules_by_id: dict, apk: str, limit: int = 25) -> list[dict]:
-    """Scan lib/**/*.so bytes for URLs + key shapes (no external `strings` needed).
+    """Scan lib/**/*.so via carved strings + decode cascade.
 
     Reuses AS-0021 (URLs) and AS-0016 (keys) rule metadata when present.
+    Decoded candidates are rescored against the same shapes, so base64/hex
+    hidden constants surface with their transform named.
     """
     import zipfile
+    from . import carve as CV
     out: list[dict] = []
     hits = 0
+
+    def emit(rule_id: str, n: str, text: str, extra: dict) -> bool:
+        nonlocal hits
+        r = rules_by_id.get(rule_id)
+        if r is None:
+            return False
+        extra = dict(extra, native=True)
+        out.append(R.finding(r, file=n, evidence=text, extra=extra))
+        hits += 1
+        return hits >= limit
+
+    def score(s: str) -> tuple[str | None, str | None]:
+        m = _URL_RE.search(s)
+        if m and "schemas.android.com" not in m.group(0) and "w3.org" not in m.group(0):
+            return "AS-0021", f"native URL {m.group(0)[:120]}"
+        m = _KEY_RE.search(s)
+        if m:
+            return "AS-0016", f"native key-shaped token {m.group(0)[:32]}…"
+        return None, None
+
     try:
         with zipfile.ZipFile(apk) as z:
             names = [n for n in z.namelist()
@@ -444,29 +467,38 @@ def check_native(rules_by_id: dict, apk: str, limit: int = 25) -> list[dict]:
                     continue
                 if len(raw) > 8_000_000:
                     raw = raw[:8_000_000]
-                text = raw.decode("utf-8", "replace")
-                for m in _URL_RE.finditer(text):
-                    if "schemas.android.com" in m.group(0) or "w3.org" in m.group(0):
-                        continue
-                    r = rules_by_id.get("AS-0021")
-                    if r is None:
+                try:
+                    spans = CV.extract(raw)
+                except Exception:
+                    continue
+                for sp in spans:
+                    rid, ev = score(sp["text"])
+                    if rid and emit(rid, n, f"{n}: {ev}",
+                                    {"encoding": sp["encoding"],
+                                     "offset": sp["offset"]}):
                         break
-                    out.append(R.finding(
-                        r, file=n,
-                        evidence=f"{n}: native URL {m.group(0)[:120]}",
-                        extra={"native": True}))
-                    hits += 1
                     if hits >= limit:
                         break
-                for m in _KEY_RE.finditer(text):
-                    r = rules_by_id.get("AS-0016")
-                    if r is None:
+                if hits >= limit:
+                    break
+                texts = [sp["text"] for sp in spans
+                         if len(sp["text"]) >= 8][:2000]
+                try:
+                    cands = CV.run_cascade(texts)
+                except Exception:
+                    continue
+                for c in cands:
+                    if c.get("truncated"):
                         break
-                    out.append(R.finding(
-                        r, file=n,
-                        evidence=f"{n}: native key-shaped token {m.group(0)[:32]}…",
-                        extra={"native": True}))
-                    hits += 1
+                    try:
+                        dec = c["decoded"].decode("utf-8", "replace")
+                    except Exception:
+                        continue
+                    rid, ev = score(dec)
+                    if rid and emit(rid, n, f"{n}: {c['transform']} {ev}",
+                                    {"carved": True,
+                                     "transform": c["transform"]}):
+                        break
                     if hits >= limit:
                         break
                 if hits >= limit:
@@ -645,6 +677,14 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     bad = apktools.badging(apk)
     pk = apktools.packer(apk)
     packed = apktools.packed_verdict(pk, st)
+    if not packed:
+        # No packer strings, but encrypted blobs still hide code: windowed
+        # entropy + chi-square contrast gate over dex/.so (stdlib only).
+        from . import entropy as ENT
+        enc = ENT.scan_apk(apk)
+        if enc:
+            packed = [f"high-entropy regions ({', '.join(e['file'] for e in enc[:3])})"]
+            st["entropy_regions"] = enc
 
     # aapt2 can supply identity when the manifest could not be decoded
     package = man.get("package") or bad.get("package", "")
@@ -698,9 +738,12 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
             })
         if do_regex and not packed and not blind_code:
             from . import taint_smali as TS  # local: taint_smali imports VENDOR_PREFIXES from here
+            from . import callgraph as CG  # local: same cycle, same reason
             findings += check_regex([r for r in all_rules if r.kind == "regex"],
                                     decode_dir)
             findings += TS.scan(decode_dir, [r for r in all_rules if r.kind == "smali-taint"])
+            findings += CG.check_reachability(
+                [r for r in all_rules if r.kind == "reachability"], decode_dir, man)
             by_id = {r.id: r for r in all_rules}
             if st.get("so_files"):
                 findings += check_native(by_id, apk)
@@ -710,7 +753,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
                 "title": ("Code rules skipped (sample is packed)" if packed else
                           "Code rules skipped (no decoded sources)"),
                 "severity": "info", "kind": "integrity", "component": "", "file": "",
-                "evidence": f"{len([r for r in all_rules if r.kind in ('regex', 'smali-taint')])} code rules not run "
+                "evidence": f"{len([r for r in all_rules if r.kind in ('regex', 'smali-taint', 'reachability')])} code rules not run "
                             f"({'packed' if packed else 'manifest-only decode'})",
                 "recommendation": ("Unpack from memory, then re-run." if packed else
                                    "Install apktool and re-run for full code coverage."),

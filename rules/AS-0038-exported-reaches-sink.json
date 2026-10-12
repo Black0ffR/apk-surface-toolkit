@@ -1,0 +1,15 @@
+{
+  "id": "AS-0038",
+  "title": "Exported entry reaches a sensitive sink",
+  "kind": "reachability",
+  "check": "reachability",
+  "severity": "high",
+  "maswe": "MASWE-0032",
+  "tags": ["callgraph", "ipc", "dataflow"],
+  "params": {
+    "sinks": ["loadUrl", "addJavascriptInterface", "Runtime;->exec", "DexClassLoader", "PathClassLoader"],
+    "cap": 15
+  },
+  "recommendation": "Confirm the sink is reachable with attacker-controlled data; reachability alone is a hypothesis. See the via-methods and drive them with tests.sh probes.",
+  "repro": "am start -W -n {package}/{component}"
+}

@@ -131,7 +131,7 @@ def generate(r: dict, path: str) -> str:
         L.append('echo "(no deep links)"\n')
 
     taints = [f for f in (r.get("findings") or [])
-              if f.get("rule") in ("AS-0033", "AS-0034")]
+              if f.get("kind") == "smali-taint"]
     if taints:
         L.append('# ------------------------------------------------- taint sinks (verify live)')
         for f in taints[:10]:
