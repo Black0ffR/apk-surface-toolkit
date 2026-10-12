@@ -20,6 +20,9 @@ CREATE TABLE methods (
     name TEXT NOT NULL
 );
 CREATE INDEX methods_cls ON methods(cls);
+-- One row per REFERENCE: kind is 'call' | 'string' | 'field-read' |
+-- 'field-write' (never a bare 'field': every reader filters on these
+-- exact values, so schema comment and queries must agree).
 CREATE TABLE instructions (
     method_id INTEGER NOT NULL REFERENCES methods(id),
     kind      TEXT NOT NULL,

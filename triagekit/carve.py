@@ -109,19 +109,63 @@ def _printable(b: bytes) -> bool:
             and all(0x20 <= c < 0x7F or c in (9, 10, 13) for c in b))
 
 
+_B64STD_SUB_RE = re.compile(r"[A-Za-z0-9+/=]{20,}")
+_B64URL_SUB_RE = re.compile(r"[A-Za-z0-9\-_]{20,}")
+_HEX_SUB_RE = re.compile(r"[0-9a-fA-F]{16,}")
+
+
 def cascade(text: str, *, max_candidates: int = DEFAULT_MAX_CANDIDATES):
-    """Yield (transform, decoded) pairs. Bounded: stops at max_candidates."""
+    """Yield (transform, decoded) pairs. Bounded: stops at max_candidates.
+
+    Whole-text attempts first; then substring sweep so a blob embedded in
+    a longer run (prefix junk, padding) is still reached. Substring hits
+    are capped per span to avoid runs exploding into findings.
+    """
     n = 0
     s = text.strip()
+    whole = False
     if len(s) >= 8 and re.fullmatch(r"[A-Za-z0-9+/=_-]{8,}", s):
         for alt in ("std", "url", "std-nopad", "url-nopad"):
             dec = _try_b64(s, alt)
-            if dec is not None:
+            # Printable only: letter/dash soup (prefix-junk--tail) matches
+            # the alphabet but decodes to garbage — claiming it would both
+            # burn budget and suppress the substring sweep below.
+            if dec is not None and _printable(dec):
                 yield (f"base64-{alt}", dec)
                 n += 1
+                whole = True
                 if n >= max_candidates:
                     return
                 break
+    if not whole:
+        # Dash joins English words into one long run, so sweep the std and
+        # url alphabets separately: "prefix-junk--<BLOB>" still resolves.
+        seen = set()
+        for sub_re, alts in ((_B64STD_SUB_RE, ("std", "std-nopad")),
+                             (_B64URL_SUB_RE, ("url", "url-nopad"))):
+            for m in sub_re.finditer(s):
+                sub = m.group(0)
+                if sub in seen:
+                    continue
+                seen.add(sub)
+                for alt in alts:
+                    dec = _try_b64(sub, alt)
+                    if dec is not None and _printable(dec):
+                        yield (f"base64-{alt}", dec)
+                        n += 1
+                        break
+                if n >= max_candidates or len(seen) >= 16:
+                    return
+        for m in _HEX_SUB_RE.finditer(s):
+            sub = m.group(0)
+            if len(sub) % 2:
+                sub = sub[:-1]
+            hx = _try_hex(sub)
+            if hx is not None and _printable(hx):
+                yield ("hex", hx)
+                n += 1
+                if n >= max_candidates:
+                    return
     hx = _try_hex(s)
     if hx is not None:
         yield ("hex", hx)
