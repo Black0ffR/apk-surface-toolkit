@@ -1,0 +1,12 @@
+{
+  "id": "AS-0036",
+  "title": "autoVerify set on a non-web deep link (ignored)",
+  "kind": "manifest",
+  "check": "deeplink_autoverify_custom",
+  "severity": "low",
+  "maswe": "MASWE-0029",
+  "tags": ["deeplink", "app-links"],
+  "params": {"webSchemes": ["http", "https"]},
+  "recommendation": "Asset-links verification only runs for http/https. Treat this scheme as untrusted input regardless of the flag.",
+  "repro": "am start -W -a android.intent.action.VIEW -d \"{scheme}://{host}probe?x=1\" {package}"
+}

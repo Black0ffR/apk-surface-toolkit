@@ -179,6 +179,12 @@ def parse(manifest_path: str) -> dict:
                     # <data scheme="app" host="oauth"/> and <data scheme="https"
                     # host="app.example.com"/> are two different link targets, and
                     # merging them produces a test command that targets neither.
+                    # Non-exported components are reachable only from the same
+                    # UID, so their schemes are not external attack surface.
+                    # Non-BROWSABLE exported schemes ARE kept: any installed app
+                    # can still fire them with an explicit intent + data URI.
+                    if not comp["exported"]:
+                        continue
                     if scheme in ("http", "https"):
                         empty["app_links"].append(
                             {"component": name, "scheme": scheme, "host": host,
@@ -198,6 +204,9 @@ def parse(manifest_path: str) -> dict:
                             "paths": [d[k] for k in ("path", "pathPrefix", "pathPattern")
                                       if d.get(k)],
                             "auto_verify": f["autoVerify"],
+                            "exported": bool(exported),
+                            "browsable": ("android.intent.category.BROWSABLE"
+                                          in f["categories"]),
                         })
 
     # de-duplicate deep links

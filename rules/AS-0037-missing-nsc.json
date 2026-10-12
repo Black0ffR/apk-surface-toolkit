@@ -1,0 +1,12 @@
+{
+  "id": "AS-0037",
+  "title": "No network security config on a modern targetSdk",
+  "kind": "manifest",
+  "check": "nsc_missing",
+  "severity": "low",
+  "maswe": "MASWE-0026",
+  "tags": ["network", "config"],
+  "params": {"minTargetSdk": 24},
+  "recommendation": "Add a network security config: explicit cleartext policy, system-only trust anchors, and a pin-set for sensitive hosts.",
+  "repro": "grep -n networkSecurityConfig AndroidManifest.xml"
+}

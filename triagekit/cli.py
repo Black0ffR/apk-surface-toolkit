@@ -115,6 +115,20 @@ def cmd_analyze(a) -> int:
         ws = r["workspace"]
         RPT.write(r, os.path.join(ws, "report.md"))
         tpath = tests_gen.generate(r, os.path.join(ws, "tests.sh"))
+        if getattr(a, "sarif", None):
+            from . import sarif as SARIF
+            from . import rules as _R
+            _rules, _errs = _R.load_dir(a.rules)
+            _robjs = [{"rule": x.id, "title": x.title,
+                       "recommendation": x.recommendation} for x in _rules]
+            dest = a.sarif
+            if dest == "-":
+                print(json.dumps(SARIF.convert(r, _robjs),
+                                 indent=2, ensure_ascii=False))
+            else:
+                spath = dest if os.path.isabs(dest) else os.path.join(ws, dest)
+                SARIF.write(r, _robjs, spath)
+                print(f"==> sarif: {spath}")
         if a.json:
             print(json.dumps(r, indent=2, ensure_ascii=False))
         elif a.quiet:
@@ -218,6 +232,8 @@ def build_parser() -> argparse.ArgumentParser:
     an.add_argument("--format", default="text", choices=["text", "json"])
     an.add_argument("--json", action="store_true")
     an.add_argument("--jsonl", action="store_true", help="append a summary to findings.jsonl")
+    an.add_argument("--sarif", nargs="?", const="analysis.sarif", default=None,
+                    help="also write SARIF 2.1.0 (path in workspace, absolute path, or - for stdout)")
     an.add_argument("--no-decode", action="store_true")
     an.add_argument("--no-regex", action="store_true")
     an.add_argument("--preflight", action="store_true", dest="preflight_only",

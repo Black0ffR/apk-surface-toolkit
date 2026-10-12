@@ -328,6 +328,68 @@ def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
                     out.append(R.finding(
                         r, evidence=f"android:{flag}=\"{str(got).lower()}\"",
                         extra={"flag": flag, "value": got}))
+        elif c == "weak_permission_exported":
+            # Only what we can PROVE: a permission this app defines itself at
+            # normal/dangerous level (auto-granted, user cannot revoke).
+            # Platform permissions are the stronger guard — silence, not FPs.
+            # Undeclared names belong to AS-0002, not here.
+            levels = {d.get("name"): (d.get("protection_level") or "normal").lower()
+                      for d in man.get("defined_permissions", [])}
+            for comp in comps:
+                if not comp.get("exported"):
+                    continue
+                for pk in ("permission", "read_permission", "write_permission"):
+                    perm = comp.get(pk)
+                    if not perm:
+                        continue
+                    if perm.startswith("android.permission."):
+                        continue
+                    if perm.split(".")[-1] in platform:
+                        continue
+                    level = levels.get(perm)
+                    if level is None:
+                        continue
+                    if level.startswith("normal") or level == "dangerous" or level == "":
+                        out.append(R.finding(
+                            r, component=comp["name"],
+                            evidence=(f'{comp["type"]} guarded only by the app\'s own '
+                                      f'{pk}="{perm}" (protectionLevel="{level or "normal"}" - '
+                                      f"auto-granted at install, user cannot revoke)"),
+                            extra={"permission": perm, "attribute": pk,
+                                   "protection_level": level or "normal",
+                                   "component_type": comp["type"]}))
+        elif c == "deeplink_autoverify_custom":
+            web = {s.lower() for s in r.params.get("webSchemes", ["http", "https"])}
+            for d in man.get("deeplinks", []):
+                if not d.get("auto_verify"):
+                    continue
+                if not d.get("exported") or not d.get("browsable"):
+                    continue
+                sch = (d.get("scheme") or "").lower()
+                if not sch or sch in web:
+                    continue
+                out.append(R.finding(
+                    r, component=d.get("component", ""),
+                    evidence=(f'autoVerify="true" on exported BROWSABLE scheme "{sch}" - '
+                              f"asset-links verification only runs for http/https, so it is ignored"),
+                    extra={"scheme": sch, "host": d.get("host"),
+                           "component": d.get("component", "")}))
+        elif c == "nsc_missing":
+            try:
+                floor = int(r.params.get("minTargetSdk", 24))
+            except (TypeError, ValueError):
+                floor = 24
+            try:
+                tsdk = int(man.get("target_sdk") or 0)
+            except (TypeError, ValueError):
+                tsdk = 0
+            flags = man.get("application", {}) or {}
+            if tsdk >= floor and not flags.get("networkSecurityConfig"):
+                out.append(R.finding(
+                    r, evidence=(f"targetSdk {tsdk} with no android:networkSecurityConfig - "
+                                  f"platform TLS defaults apply, nothing pinned, no per-domain policy"),
+                    extra={"target_sdk": tsdk, "min_target_sdk": floor,
+                           "absent": True}))
     return out
 
 
@@ -567,6 +629,16 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
                 nsc = mf.find_network_security_config(apk)
     elif not pre.get("ok", True):
         decode_msg = "skipped: preflight blocked unpack"
+    elif not do_decode and pre.get("ok", True):
+        # --no-decode means "no JVM", not "no manifest": the dependency-free
+        # AXML fallback still runs so manifest findings are not lost.
+        fallback_ok, fb_msg = apktools.decode_manifest_only(apk, decode_dir)
+        if fallback_ok:
+            decoded_ok = True
+            blind_code = True
+            decode_msg = f"decode skipped (--no-decode) | fallback: {fb_msg}"
+            man = mf.parse(os.path.join(decode_dir, "AndroidManifest.xml"))
+            nsc = mf.find_network_security_config(apk)
 
     st = apktools.structure(apk)
     sig = apktools.signature(apk)
@@ -635,11 +707,13 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         elif do_regex and (packed or blind_code):
             findings.append({
                 "id": "BLIND-0002", "tool": "apk-surface", "rule": "BLIND-0002",
-                "title": "Regex rules skipped (sample is packed)",
+                "title": ("Code rules skipped (sample is packed)" if packed else
+                          "Code rules skipped (no decoded sources)"),
                 "severity": "info", "kind": "integrity", "component": "", "file": "",
                 "evidence": f"{len([r for r in all_rules if r.kind in ('regex', 'smali-taint')])} code rules not run "
                             f"({'packed' if packed else 'manifest-only decode'})",
-                "recommendation": "Unpack first, then re-run.",
+                "recommendation": ("Unpack from memory, then re-run." if packed else
+                                   "Install apktool and re-run for full code coverage."),
                 "maswe": None, "static_only": True,
                 "verification": {"status": "n/a", "script": None},
             })
@@ -648,6 +722,9 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     sev_count: dict[str, int] = {}
     for f in findings:
         sev_count[f["severity"]] = sev_count.get(f["severity"], 0) + 1
+    blind_spots = [{"id": f["rule"], "reason": f["title"],
+                    "consequence": f.get("recommendation", "")}
+                   for f in findings if f.get("rule", "").startswith("BLIND-")]
 
     report = {
         "tool": "apk-surface",
@@ -683,6 +760,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         "rule_errors": rule_errors,
         "rule_count": len(all_rules),
         "findings": findings,
+        "blind_spots": blind_spots,
         "severity_counts": sev_count,
     }
     write_json(os.path.join(ws, "analysis.json"), report)

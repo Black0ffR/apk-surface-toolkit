@@ -1,0 +1,11 @@
+{
+  "id": "AS-0035",
+  "title": "Exported component guarded only by a weak app permission",
+  "kind": "manifest",
+  "check": "weak_permission_exported",
+  "severity": "medium",
+  "maswe": "MASWE-0018",
+  "tags": ["ipc", "permission"],
+  "recommendation": "Raise the custom permission to signature protection, or gate the component with a platform permission. Normal/dangerous app permissions are auto-granted and user-irrevocable.",
+  "repro": "am start -W -n {package}/{component}"
+}

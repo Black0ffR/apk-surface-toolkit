@@ -104,6 +104,11 @@ def _parse_string_pool(data: bytes, start: int) -> list[str]:
 
 def _attr_value(pool: list[str], raw: int, data_type: int, data: int) -> str:
     if data_type == TYPE_STRING:
+        # The pool index for a string lives in rawValue; data is ZERO on
+        # some encoders (and duplicates the index on aapt/aapt2 output).
+        # Prefer raw, fall back to data so both encodings decode.
+        if raw != 0xFFFFFFFF and 0 <= raw < len(pool):
+            return pool[raw]
         return pool[data] if 0 <= data < len(pool) else ""
     if data_type == TYPE_REFERENCE:
         return f"@0x{data:08x}"

@@ -50,6 +50,12 @@ def render(r: dict) -> str:
     L.append(f"**{total} finding(s)**: " + " · ".join(
         f"{SEV_ICON[s]} {counts[s]} {s}" for s in SEV_ORDER if counts.get(s)) or "0 findings")
     L.append("")
+    if r.get("blind_spots"):
+        L.append("## Blind spots")
+        L.append("")
+        for b in r["blind_spots"]:
+            L.append(f"- `{b.get('id')}` {b.get('reason')} — {b.get('consequence')}")
+        L.append("")
 
     # ---- signature
     s = r.get("signature", {})
