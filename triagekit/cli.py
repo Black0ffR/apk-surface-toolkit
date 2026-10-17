@@ -7,7 +7,8 @@ import os
 import subprocess
 import sys
 
-from . import __version__, apktools, diff as D, report as RPT, rules as R, tests_gen
+from . import (__version__, apktools, diff as D, report as RPT,
+               runtime_trace as RT, rules as R, tests_gen)
 from .analyzer import DEFAULT_RULES, analyse
 from .utils import read_json, write_json
 
@@ -50,6 +51,17 @@ def human(r: dict) -> str:
             L.append(f"    {SEV_ICON[f['severity']]} {f['rule']} {f['title']}"
                      + (f"  [{f['component']}]" if f.get("component") else ""))
 
+    # Coverage status. A partial scan is a hypothesis, not a clean result.
+    analysis = r.get("analysis") or {}
+    status = str(analysis.get("status") or "")
+    if status and status != "complete":
+        L.append("")
+        L.append(f"[!!] analysis: {status} — negative results are inconclusive, "
+                 "not proof of absence")
+        for s in analysis.get("stages") or []:
+            if s.get("ran") and not s.get("complete") and s.get("reason"):
+                L.append(f"[!!] stage {s.get('stage')} incomplete: {s['reason']}")
+
     # Blind-spot warnings. Silence must never be mistakable for a clean result.
     if not r.get("decode", {}).get("ok"):
         L.append("")
@@ -71,7 +83,22 @@ def human(r: dict) -> str:
     return "\n".join(L)
 
 
-def route(r: dict) -> tuple[str, str]:
+def _status_note(r: dict) -> str:
+    """Coverage note for routing: empty when analysis is complete."""
+    analysis = r.get("analysis") or {}
+    status = str(analysis.get("status") or "")
+    if not status or status == "complete":
+        return ""
+    reasons = [f"{s.get('stage')}: {s.get('reason')}"
+               for s in analysis.get("stages") or []
+               if s.get("ran") and not s.get("complete") and s.get("reason")]
+    note = f"analysis incomplete ({status})"
+    if reasons:
+        note += ": " + "; ".join(reasons)
+    return note
+
+
+def _route_base(r: dict) -> tuple[str, str]:
     """The routing decision: what should the analyst do next."""
     if not r.get("decode", {}).get("ok"):
         return ("decode", "apktool decode failed — check the framework jar and the packer verdict")
@@ -84,6 +111,17 @@ def route(r: dict) -> tuple[str, str]:
     if any(f.get("severity") == "medium" for f in r.get("findings", [])):
         return ("verify", "medium findings: confirm at runtime before reporting")
     return ("complete", "no actionable surface found — add rules or move to the next sample")
+
+
+def route(r: dict) -> tuple[str, str]:
+    """Route plus the coverage caveat: partial analysis is never 'complete'."""
+    kind, why = _route_base(r)
+    note = _status_note(r)
+    if not note:
+        return kind, why
+    if kind == "complete":
+        return ("incomplete", note + " — fix coverage before treating this as a clean result")
+    return (kind, why + " · " + note)
 
 
 # ------------------------------------------------------------------ commands
@@ -110,7 +148,8 @@ def cmd_analyze(a) -> int:
             continue
         r = analyse(apk, a.out, rules_dir=a.rules, do_decode=not a.no_decode,
                     do_regex=not a.no_regex, preflight_check=True,
-                    platform_perms=a.platform_perms)
+                    platform_perms=a.platform_perms,
+                    command=getattr(a, "command", None))
         results.append(r)
         ws = r["workspace"]
         RPT.write(r, os.path.join(ws, "report.md"))
@@ -146,8 +185,11 @@ def cmd_analyze(a) -> int:
                 print("skipped.")
         if any(f.get("severity") in ("critical", "high") for f in r.get("findings", [])):
             rc = 1
-        if not r.get("decode", {}).get("ok"):
-            rc = 3   # INCOMPLETE: distinct from CLEAN(0) and FINDINGS(1)
+        status = str((r.get("analysis") or {}).get("status") or "")
+        if not r.get("decode", {}).get("ok") or status in ("partial", "not_analysed"):
+            # INCOMPLETE: distinct from CLEAN(0) and FINDINGS(1). A partial
+            # scan must not exit as clean just because it found nothing.
+            rc = 3
     if a.jsonl:
         for r in results:
             from .utils import append_jsonl
@@ -201,6 +243,65 @@ def cmd_diff(a) -> int:
         print(json.dumps(d, indent=2))
     else:
         print(D.render(d))
+    return 0
+
+
+def cmd_trace(a) -> int:
+    """Ingest a JSONL runtime trace into an existing analysis (RT-01)."""
+    analysis_path = a.analysis
+    if os.path.isdir(analysis_path):
+        analysis_path = os.path.join(analysis_path, "analysis.json")
+    if not os.path.isfile(analysis_path):
+        print(f"trace: analysis.json not found: {a.analysis}", file=sys.stderr)
+        return 2
+    if not a.trace or not os.path.isfile(a.trace):
+        print(f"trace: trace file not found: {a.trace}", file=sys.stderr)
+        return 2
+
+    r = read_json(analysis_path)
+    ws = r.get("workspace") or os.path.dirname(os.path.abspath(analysis_path))
+    decoded = (r.get("decode") or {}).get("dir") or ""
+    apk = r.get("apk_path") or ""
+    so_files = (r.get("structure") or {}).get("so_files") or []
+    libraries, lib_problems = (RT.library_records_from_apk(apk, so_files)
+                               if apk else ([], []))
+
+    events, problems = RT.load_trace(a.trace, max_events=a.max_events)
+    apk_sha = str(r.get("apk_sha256") or "")
+    RT.check_artifacts(events, apk_sha256=apk_sha,
+                       libraries={lib.get("name"): lib.get("sha256")
+                                  for lib in libraries})
+    RT.apply_event_load_biases(events, libraries)
+    static_ids = RT.static_identities_from_tree(decoded) if decoded else []
+    jni_records = RT.jni_records_from_tree(decoded, libraries) if decoded else []
+    corr = RT.correlate(events, apk_sha256=apk_sha, libraries=libraries,
+                        static_identities=static_ids, problems=problems)
+    linked = RT.link_jni(events, jni_records)
+    block = RT.build_report_block(
+        corr, trace_source=os.path.basename(a.trace), problems=problems,
+        jni_records=jni_records, artifact_sha256=apk_sha,
+        max_evidence=a.max_evidence)
+    if lib_problems:
+        block["library_problems"] = lib_problems
+    if linked:
+        block["summary"]["jni_linked"] = linked
+    RT.attach_to_report(r, block)
+    write_json(analysis_path, r)
+    write_json(os.path.join(ws, "runtime_trace.json"), block)
+    md = os.path.join(ws, "report.md")
+    if os.path.exists(md):
+        RPT.write(r, md)
+
+    if a.json:
+        print(json.dumps(block, indent=2, ensure_ascii=False))
+    else:
+        s = block["summary"]
+        print(f"trace: {block['trace']['source']} — "
+              f"{s.get('events_observed', 0)} events, "
+              f"{s.get('confirmed', 0)} confirmed, "
+              f"{s.get('unresolved', 0)} unresolved")
+        print(f"==> runtime_trace.json · analysis.json updated · report.md "
+              f"{'re-rendered' if os.path.exists(md) else 'not present'}")
     return 0
 
 
@@ -258,13 +359,25 @@ def build_parser() -> argparse.ArgumentParser:
     d.add_argument("--json", action="store_true")
     d.set_defaults(func=cmd_diff)
 
+    t = sub.add_parser("trace",
+                       help="ingest a JSONL runtime trace into an analysis")
+    t.add_argument("trace", help="normalized JSONL trace file (§17.2)")
+    t.add_argument("-a", "--analysis", required=True,
+                   help="analysis.json path or its workspace directory")
+    t.add_argument("--max-events", type=int, default=RT.DEFAULT_MAX_EVENTS)
+    t.add_argument("--max-evidence", type=int, default=RT.DEFAULT_MAX_EVIDENCE)
+    t.add_argument("--json", action="store_true")
+    t.set_defaults(func=cmd_trace)
+
     doc = sub.add_parser("doctor", help="check the environment")
     doc.set_defaults(func=cmd_doctor)
     return p
 
 
 def main(argv=None) -> int:
-    a = build_parser().parse_args(argv)
+    raw = list(sys.argv[1:] if argv is None else argv)
+    a = build_parser().parse_args(raw)
+    a.command = raw
     if a.cmd == "analyze":
         a.json = a.json or a.format == "json"
     return a.func(a)
