@@ -35,12 +35,89 @@ def _chi_square(buf: bytes) -> float:
     return sum((Counter(buf).get(b, 0) - exp) ** 2 / exp for b in range(256))
 
 
+def scan_region_detailed(data: bytes, *, window_size: int = WINDOW,
+                         max_windows: int = SAMPLE_WINDOWS,
+                         entropy_high: float = ENTROPY_HIGH,
+                         contrast_min: float = CONTRAST_MIN,
+                         chi_uniform_max: float = CHI_UNIFORM_MAX) -> dict:
+    """Explainable windowed entropy record (plan §12.2 contract).
+
+    Per-window start/end/size/entropy plus why each window was flagged;
+    numeric scores stay separate from the heuristic classification, which
+    is always a candidate judgment with validation not_runtime_verified
+    (scoring says higher entropy/closer-to-uniform, nothing proves it is
+    encrypted content).
+    """
+    specs = _window_specs(data, window_size, max_windows)
+    if len(specs) > max_windows:
+        specs = specs[:max_windows]
+    windows = []
+    reasons: list[str] = []
+    for start, buf in specs:
+        ent = _shannon_bytes(buf)
+        flagged = ent >= entropy_high
+        win = {"start": start, "end": start + len(buf), "size": len(buf),
+               "entropy": round(ent, 4), "flagged": flagged,
+               "flag_reason": (f"window entropy {ent:.2f} >= threshold "
+                               f"{entropy_high}") if flagged else ""}
+        windows.append(win)
+
+    ents = sorted(w["entropy"] for w in windows)
+    if not specs:
+        return {"windows": [], "score": 0.0,
+                "baseline": {"method": "median-window-shannon-entropy",
+                             "value": 0.0},
+                "comparison": {"method": "chi-square-uniformity-256",
+                               "value": None},
+                "classification": {"value": "not-flagged", "heuristic": True,
+                                   "validation": "not_runtime_verified"},
+                "reasons": ["region empty; no windows evaluated"],
+                "window_size": window_size, "windows_evaluated": 0}
+    peak = ents[-1]
+    median = ents[len(ents) // 2]
+    contrast = peak - median
+    chi = _chi_square(b"".join(buf for _s, buf in specs[:16]))
+    encrypted = peak >= entropy_high and (
+        contrast >= contrast_min or chi < chi_uniform_max)
+    reasons.append(f"peak window entropy {peak:.2f} (threshold {entropy_high})")
+    if contrast >= contrast_min:
+        reasons.append(f"median-vs-peak contrast {contrast:.2f} >= {contrast_min}")
+    if chi < chi_uniform_max:
+        reasons.append(f"chi-square uniformity {chi:.1f} < {chi_uniform_max}")
+    if not encrypted:
+        reasons = ["heuristic gate not met"]
+    return {
+        "windows": windows,
+        "score": round(peak, 2),
+        "baseline": {"method": "median-window-shannon-entropy",
+                     "value": round(median, 2)},
+        "comparison": {"method": "chi-square-uniformity-256",
+                       "value": None if not math.isfinite(chi)
+                       else round(chi, 1)},
+        "classification": {
+            "value": "candidate-encrypted" if encrypted else "not-flagged",
+            "heuristic": True,
+            "validation": "not_runtime_verified",
+        },
+        "reasons": reasons,
+        "window_size": window_size,
+        "windows_evaluated": len(windows),
+    }
+
+
+def _window_specs(data: bytes, size: int = WINDOW,
+                  limit: int = SAMPLE_WINDOWS) -> list[tuple[int, bytes]]:
+    """Windows with their start offsets (exact legacy selection order)."""
+    if len(data) <= size * limit:
+        return [(i, data[i:i + size]) for i in range(0, len(data), size)]
+    step = max(1, (len(data) - size) // limit)
+    return [(i, data[i:i + size])
+            for i in range(0, len(data) - size + 1, step)][:limit]
+
+
 def _windows(data: bytes, size: int = WINDOW,
              limit: int = SAMPLE_WINDOWS) -> list[bytes]:
-    if len(data) <= size * limit:
-        return [data[i:i + size] for i in range(0, len(data), size)]
-    step = max(1, (len(data) - size) // limit)
-    return [data[i:i + size] for i in range(0, len(data) - size + 1, step)][:limit]
+    return [buf for _start, buf in _window_specs(data, size, limit)]
 
 
 def scan_region(data: bytes) -> dict:
