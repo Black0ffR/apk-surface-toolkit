@@ -23,10 +23,47 @@ def _rule_object(rule: dict) -> dict:
 def _location(f: dict) -> list:
     if not f.get("file"):
         return []
-    return [{"physicalLocation": {
-        "artifactLocation": {"uri": f["file"]},
-        "region": {"startLine": (f.get("detail") or {}).get("line", 1)},
-    }}]
+    physical = {"artifactLocation": {"uri": f["file"]}}
+    line = _line_of(f)
+    if line is not None:
+        physical["region"] = {"startLine": line}
+    return [{"physicalLocation": physical}]
+
+
+def _line_of(f: dict):
+    """Best evidence-backed 1-based line, or None; never invented."""
+    detail = f.get("detail") or {}
+    for key in ("line", "sink_line"):
+        line = detail.get(key)
+        if isinstance(line, int) and not isinstance(line, bool) and line > 0:
+            return line
+    return None
+
+
+def _invocations(report: dict) -> list:
+    """SARIF invocations block: completeness is a first-class CI signal."""
+    analysis = report.get("analysis")
+    status = analysis.get("status") if isinstance(analysis, dict) else None
+    ok = status == "complete"
+    inv = {"executionSuccessful": ok}
+    if not ok:
+        notes = []
+        for stage in (analysis.get("stages", [])
+                      if isinstance(analysis, dict) else []):
+            if (stage.get("ran") and not stage.get("complete")
+                    and stage.get("reason")):
+                notes.append({
+                    "level": "warning",
+                    "message": {"text": f"{stage.get('stage')}: "
+                                        f"{stage.get('reason')}"}})
+        if not notes:
+            text = (f"analysis status: {status}" if status else
+                    "analysis status not recorded in report scope")
+            notes.append({"level": "error" if status == "not_analysed"
+                                   else "warning",
+                          "message": {"text": text}})
+        inv["toolExecutionNotifications"] = notes
+    return [inv]
 
 
 def _fingerprint(f: dict) -> str:
@@ -59,6 +96,7 @@ def convert(report: dict, rules: list) -> dict:
             "tool": {"driver": {"name": TOOL,
                                 "version": report.get("version", "?"),
                                 "rules": rule_objs}},
+            "invocations": _invocations(report),
             "results": results,
         }],
     }

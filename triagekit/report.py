@@ -47,8 +47,10 @@ def render(r: dict) -> str:
     if not r.get("decode", {}).get("ok"):
         L.append(f"> ⚠️ **apktool decode did not run**: {r.get('decode', {}).get('detail')}")
         L.append("")
-    L.append(f"**{total} finding(s)**: " + " · ".join(
-        f"{SEV_ICON[s]} {counts[s]} {s}" for s in SEV_ORDER if counts.get(s)) or "0 findings")
+    severity_parts = " · ".join(f"{SEV_ICON[s]} {counts[s]} {s}"
+                                for s in SEV_ORDER if counts.get(s))
+    L.append(f"**{total} finding(s)**: {severity_parts}" if severity_parts
+             else f"**{total} finding(s)**")
     L.append("")
     if r.get("blind_spots"):
         L.append("## Blind spots")
@@ -56,6 +58,33 @@ def render(r: dict) -> str:
         for b in r["blind_spots"]:
             L.append(f"- `{b.get('id')}` {b.get('reason')} — {b.get('consequence')}")
         L.append("")
+
+    # ---- coverage & analysis status (partial results are never a clean scan)
+    analysis = r.get("analysis")
+    if isinstance(analysis, dict):
+        status = str(analysis.get("status") or "")
+        L.append("## Coverage & analysis status")
+        L.append("")
+        if status == "complete":
+            L.append("Analysis status: **complete** — every applicable stage finished.")
+        elif status:
+            L.append(f"> ⚠️ **Analysis status: {status}** — a negative result is "
+                     "inconclusive, not proof of absence.")
+        else:
+            L.append("Analysis status: —")
+        L.append("")
+        stages = analysis.get("stages") or []
+        if stages:
+            L.append(_tbl(["Stage", "Ran", "Complete", "Reason"],
+                          [[s.get("stage"), _b(s.get("ran")), _b(s.get("complete")),
+                            s.get("reason") or "—"] for s in stages]))
+        limitations = list(analysis.get("limitations") or [])
+        if limitations:
+            L.append("Limitations:")
+            L.append("")
+            for lim in limitations:
+                L.append(f"- {lim}")
+            L.append("")
 
     # ---- signature
     s = r.get("signature", {})
@@ -101,6 +130,12 @@ def render(r: dict) -> str:
         for cfg in nsc:
             L.append(f"**{cfg.get('file')}**")
             L.append("")
+            if cfg.get("parse_error"):
+                L.append("> ⚠️ unparseable — contents unknown; NSC-based "
+                         "findings and the absence of NSC findings are both "
+                         "inconclusive for this file.")
+                L.append("")
+                continue
             L.append(_tbl(["Section", "cleartext", "trust anchors", "pins"],
                           [[d.get("kind"), _b(d.get("cleartext")), ", ".join(d.get("trust_anchors") or []) or "—",
                             ("yes" if d.get("pinning") else ("yes" if cfg.get("pins") else "no"))]
@@ -239,6 +274,44 @@ def render(r: dict) -> str:
                 L.append(f"- Manual test: `{x['repro']}`")
             L.append(f"- Verification: **{x.get('verification', {}).get('status', 'unverified')}**")
             L.append("")
+
+    # ---- runtime trace (observed events; additive, never a static claim)
+    rt = r.get("runtime_trace")
+    if rt:
+        s = rt.get("summary") or {}
+        t = rt.get("trace") or {}
+        L.append("## Runtime trace (observed executions)")
+        L.append("")
+        L.append(f"- Trace: `{t.get('source') or '?'}` · "
+                 f"artifact `{(t.get('artifact_sha256') or '')[:12]}`")
+        L.append(f"- Events observed: {s.get('events_observed', 0)} · "
+                 f"confirmed: {s.get('confirmed', 0)} · "
+                 f"unresolved: {s.get('unresolved', 0)} · "
+                 f"duplicates ignored: {s.get('duplicates', 0)} · "
+                 f"out-of-order: {s.get('out_of_order', 0)}")
+        if rt.get("not_observed"):
+            L.append("")
+            L.append("Not observed in this trace (this is **not** evidence of "
+                     "unreachability):")
+            L.append("")
+            for ident in rt["not_observed"][:40]:
+                L.append(f"- `{ident}`")
+        if rt.get("unresolved"):
+            L.append("")
+            L.append("Unresolved runtime identities:")
+            L.append("")
+            for u in rt["unresolved"][:20]:
+                reasons = "; ".join(u.get("reasons") or []) or "—"
+                L.append(f"- `{u.get('runtime_identity')}` ({u.get('layer')})"
+                         f" — {reasons}")
+        if rt.get("artifact_problems") or rt.get("parse_problems"):
+            L.append("")
+            L.append(f"- Artifact problems: "
+                     f"{len(rt.get('artifact_problems') or [])} · parse "
+                     f"problems: {len(rt.get('parse_problems') or [])}")
+        for note in rt.get("limitations") or []:
+            L.append(f"- ⚠️ {note}")
+        L.append("")
 
     if r.get("rule_errors"):
         L.append("## Rule load errors")
