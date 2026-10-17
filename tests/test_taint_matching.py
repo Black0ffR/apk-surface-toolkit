@@ -194,7 +194,7 @@ class TestCoverageCounters(unittest.TestCase):
     def test_unsupported_instruction_counted(self):
         counters = {}
         body = [INV_SRC, "    move-result-object v0",
-                "    iget-object v1, p0, Lx;->f:Ljava/lang/Object;", INV_SINK]
+                "    invoke-custom {v1}, Lx;->noop()V", INV_SINK]
         hits = TS._scan_method(body, _src(["getStringExtra"]),
                                _sink(["loadUrl"]), counters)
         self.assertEqual(counters,
@@ -259,7 +259,7 @@ class TestScanFindings(unittest.TestCase):
 
     def test_gap_counts_reach_finding_reason_and_stats(self):
         body = [INV_SRC, "    move-result-object v0",
-                "    iget-object v1, p0, Lx;->f:Ljava/lang/Object;", INV_SINK]
+                "    invoke-custom {v1}, Lx;->noop()V", INV_SINK]
         with tempfile.TemporaryDirectory() as td:
             decoded = _tree(td, "".join(l + "\n" for l in body))
             stats: dict = {}
@@ -300,6 +300,68 @@ class TestScanFindings(unittest.TestCase):
             out = TS.scan(decoded, [rule])
         self.assertEqual(len(out), 1)
         self.assertIn("bad taint matcher", out[0]["evidence"])
+
+
+GETINTENT = ("    invoke-virtual {p0}, Landroid/app/Activity;->"
+             "getIntent()Landroid/content/Intent;")
+START_ACTIVITY = ("    invoke-virtual {p0, v0}, Landroid/content/Context;->"
+                  "startActivity(Landroid/content/Intent;)V")
+REBIND = ("    invoke-virtual {v0, v1}, Landroid/content/Intent;->"
+          "setClass(Landroid/content/Context;Ljava/lang/Class;)"
+          "Landroid/content/Intent;")
+
+
+class TestSelfRelaunchDiscrimination(unittest.TestCase):
+    def test_helper_positive_for_passthrough_getintent(self):
+        self.assertTrue(TS._self_relaunch(
+            {"name": "getIntent"}, {"name": "startActivity"}, 5, 9, []))
+
+    def test_helper_rejects_rebinding_between(self):
+        self.assertFalse(TS._self_relaunch(
+            {"name": "getIntent"}, {"name": "startActivity"}, 5, 9, [7]))
+
+    def test_helper_rejects_non_getintent_source(self):
+        self.assertFalse(TS._self_relaunch(
+            {"name": "getStringExtra"}, {"name": "startActivity"}, 5, 9, []))
+
+    def test_helper_rejects_non_start_sink(self):
+        self.assertFalse(TS._self_relaunch(
+            {"name": "getIntent"}, {"name": "loadUrl"}, 5, 9, []))
+
+    def _scan(self, body, **params):
+        with tempfile.TemporaryDirectory() as td:
+            decoded = _tree(td, body)
+            stats: dict = {}
+            out = TS.scan(decoded,
+                          [_rule(["getIntent"], ["startActivity"], **params)],
+                          stats=stats)
+        return out, stats
+
+    def test_default_annotates_relaunch_as_candidate(self):
+        body = GETINTENT + "\n    move-result-object v0\n" + START_ACTIVITY + "\n"
+        out, stats = self._scan(body)
+        self.assertEqual(len(out), 1, out)
+        self.assertIs(out[0]["detail"]["self_relaunch"], True)
+        self.assertEqual(out[0]["detail"]["analysis"]["classification"],
+                         "self-relaunch")
+        self.assertEqual(stats["self_relaunch"], 1)
+        self.assertEqual(stats["self_relaunch_suppressed"], 0)
+
+    def test_opt_in_suppresses_relaunch_finding(self):
+        body = GETINTENT + "\n    move-result-object v0\n" + START_ACTIVITY + "\n"
+        out, stats = self._scan(body, suppress_self_relaunch=True)
+        self.assertEqual(out, [])
+        self.assertEqual(stats["self_relaunch"], 1)
+        self.assertEqual(stats["self_relaunch_suppressed"], 1)
+
+    def test_rebinding_keeps_finding_as_redirect(self):
+        body = (GETINTENT + "\n    move-result-object v0\n"
+                + REBIND + "\n" + START_ACTIVITY + "\n")
+        out, stats = self._scan(body, suppress_self_relaunch=True)
+        self.assertEqual(len(out), 1, out)
+        self.assertNotIn("self_relaunch", out[0]["detail"])
+        self.assertEqual(stats["self_relaunch"], 0)
+        self.assertEqual(stats["self_relaunch_suppressed"], 0)
 
 
 if __name__ == "__main__":

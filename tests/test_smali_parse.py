@@ -140,10 +140,9 @@ class TestIrrelevant(unittest.TestCase):
 class TestUnsupported(unittest.TestCase):
     def test_unmodeled_opcode_is_unsupported_not_parsed(self):
         for line, tok in (
-            ("    iget-object v0, p0, Lx;->f:Ljava/lang/String;", "iget-object"),
-            ("    add-int v0, v1, v2", "add-int"),
-            ("    aput-object v0, v1, v2", "aput-object"),
-            ("    int-to-long v0, v0", "int-to-long"),
+            ("    invoke-custom {v0}, Lx;->f()V", "invoke-custom"),
+            ("    invoke-polymorphic {v0}, Lx;->f()V, ()V", "invoke-polymorphic"),
+            ("    execute-inline {v0}, Lx;->f()V", "execute-inline"),
         ):
             with self.subTest(op=tok):
                 item = SP.parse_line(line)
@@ -183,11 +182,159 @@ class TestMalformed(unittest.TestCase):
 
     def test_categories_are_distinct(self):
         got = {
-            SP.parse_line("    iget-object v0, p0, Lx;->f:I")["status"],
+            SP.parse_line("    invoke-custom {v0}, Lx;->f()V")["status"],
             SP.parse_line("    move v0")["status"],
             SP.parse_line("    nop")["status"],
         }
         self.assertEqual(got, {"unsupported", "malformed", "irrelevant"})
+
+
+class TestExpandedGrammar(unittest.TestCase):
+    def test_field_access_is_parsed(self):
+        cases = (
+            ("    iget-object v0, p0, Lx;->f:Ljava/lang/String;",
+             "iget-object", ["v0", "p0"]),
+            ("    iput-object v0, p0, Lx;->f:Ljava/lang/String;",
+             "iput-object", ["v0", "p0"]),
+            ("    sget-object v1, Lx;->a:Ljava/lang/String;",
+             "sget-object", ["v1"]),
+            ("    sput-object v1, Lx;->a:Ljava/lang/String;",
+             "sput-object", ["v1"]),
+            ("    iget-wide v0, p0, Lx;->d:J", "iget-wide", ["v0", "p0"]),
+        )
+        for line, tok, regs in cases:
+            with self.subTest(op=tok):
+                item = SP.parse_line(line)
+                self.assertEqual(item["status"], "parsed", line)
+                self.assertEqual(item["opcode"], tok)
+                self.assertEqual(item["registers"], regs)
+
+    def test_field_reference_captured(self):
+        item = SP.parse_line("    sget-object v1, Lx;->a:Ljava/lang/String;")
+        self.assertEqual(item["ref"], {
+            "owner": "Lx;", "name": "a", "descriptor": "Ljava/lang/String;"})
+
+    def test_arithmetic_and_conversions_are_parsed(self):
+        cases = (
+            ("    add-int v0, v1, v2", "add-int", ["v0", "v1", "v2"]),
+            ("    add-int/2addr v0, v1", "add-int/2addr", ["v0", "v1"]),
+            ("    add-int/lit8 v0, v1, 0x1", "add-int/lit8", ["v0", "v1"]),
+            ("    mul-long v0, v2, v4", "mul-long", ["v0", "v2", "v4"]),
+            ("    rem-int v0, v1, v2", "rem-int", ["v0", "v1", "v2"]),
+            ("    int-to-long v0, v0", "int-to-long", ["v0", "v0"]),
+            ("    neg-int v0, v1", "neg-int", ["v0", "v1"]),
+            ("    cmp-long v0, v1, v2", "cmp-long", ["v0", "v1", "v2"]),
+            ("    array-length v0, v1", "array-length", ["v0", "v1"]),
+            ("    instance-of v0, v1, Ljava/lang/String;",
+             "instance-of", ["v0", "v1"]),
+        )
+        for line, tok, regs in cases:
+            with self.subTest(op=tok):
+                item = SP.parse_line(line)
+                self.assertEqual(item["status"], "parsed", line)
+                self.assertEqual(item["opcode"], tok)
+                self.assertEqual(item["registers"], regs)
+
+    def test_array_ops_are_parsed(self):
+        for line, tok in (
+            ("    aput-object v0, v1, v2", "aput-object"),
+            ("    aput v0, v1, v2", "aput"),
+            ("    filled-new-array {v0, v1}, [I", "filled-new-array"),
+            ("    filled-new-array/range {p0 .. p2}, [Ljava/lang/String;",
+             "filled-new-array/range"),
+        ):
+            with self.subTest(op=tok):
+                item = SP.parse_line(line)
+                self.assertEqual(item["status"], "parsed", line)
+                self.assertEqual(item["opcode"], tok)
+
+    def test_move_exception_is_parsed_single_register(self):
+        item = SP.parse_line("    move-exception v0")
+        self.assertEqual(item["status"], "parsed")
+        self.assertEqual(item["opcode"], "move-exception")
+        self.assertEqual(item["registers"], ["v0"])
+
+    def test_bad_field_operands_are_malformed(self):
+        for line in (
+            "    iget-object v0, p0",                 # missing field ref
+            "    sget-object v1",                     # missing field ref
+            "    iget-object v0, v1, notafield",      # bad field token
+        ):
+            with self.subTest(line=line):
+                item = SP.parse_line(line)
+                self.assertEqual(item["status"], "malformed", line)
+                self.assertTrue(item["reason"])
+
+    def test_data_block_lines_are_irrelevant_not_malformed(self):
+        body = [
+            "    .array-data 4",
+            "        0x1",
+            "        0x2",
+            "    .end array-data",
+            "    .annotation runtime Lx/Ann;",
+            "        value = \"x\"",
+            "    .end annotation",
+            "    nop",
+        ]
+        items = SP.parse_lines(body)
+        self.assertEqual([i["status"] for i in items],
+                         ["irrelevant"] * 7 + ["irrelevant"])
+        self.assertEqual(items[-1]["opcode"], "nop")
+        # nothing inside the blocks was counted as a syntax gap
+        self.assertEqual(
+            [i["status"] for i in items].count("malformed"), 0)
+        self.assertEqual(
+            [i["status"] for i in items].count("unsupported"), 0)
+
+    def test_block_annotations_inside_method_are_irrelevant(self):
+        body = [
+            "    .annotation build Lx/Keep;",
+            "    .end annotation",
+            "    invoke-virtual {p0}, Lx;->run()V",
+        ]
+        items = SP.parse_lines(body)
+        self.assertEqual(items[0]["status"], "irrelevant")
+        self.assertEqual(items[1]["status"], "irrelevant")
+        self.assertEqual(items[2]["status"], "parsed")
+        self.assertEqual(items[2]["opcode"], "invoke-virtual")
+
+    def test_rsub_int_lit8_is_parsed(self):
+        item = SP.parse_line("    rsub-int/lit8 v5, v0, 0xe")
+        self.assertEqual(item["status"], "parsed")
+        self.assertEqual(item["opcode"], "rsub-int/lit8")
+        self.assertEqual(item["registers"], ["v5", "v0"])
+
+    def test_array_typed_invoke_owner_is_parsed(self):
+        for line, owner in (
+            ("    invoke-virtual {v0}, [Lapp/fast/ssh/X;->clone()Ljava/lang/Object;",
+             "[Lapp/fast/ssh/X;"),
+            ("    invoke-virtual {v0}, [I->clone()Ljava/lang/Object;", "[I"),
+        ):
+            with self.subTest(owner=owner):
+                item = SP.parse_line(line)
+                self.assertEqual(item["status"], "parsed", line)
+                self.assertEqual(item["ref"]["owner"], owner)
+                self.assertEqual(item["ref"]["name"], "clone")
+
+    def test_switch_payload_rows_are_irrelevant(self):
+        body = [
+            "    sparse-switch v0, :sswitch_data_0",
+            "    :sswitch_data_0",
+            "    .sparse-switch",
+            "        0x7f09005a -> :sswitch_7",
+            "        0x7f0900f2 -> :sswitch_5",
+            "    .end sparse-switch",
+            "    .packed-switch 0x0",
+            "        :pswitch_0",
+            "    .end packed-switch",
+        ]
+        items = SP.parse_lines(body)
+        self.assertEqual(
+            [i["status"] for i in items].count("malformed"), 0)
+        self.assertEqual(
+            [i["status"] for i in items].count("unsupported"), 0)
+        self.assertEqual(items[2]["status"], "irrelevant")
+        self.assertEqual(items[3]["status"], "irrelevant")
 
 
 class TestContract(unittest.TestCase):

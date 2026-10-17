@@ -21,7 +21,8 @@
       {"name": "setClass", "match": "name"}
     ],
     "interprocedural": true,
-    "cap": 15
+    "cap": 15,
+    "suppress_self_relaunch": true
   },
   "recommendation": "Never let an inbound extra select the target component/action. Allow-list destinations.",
   "repro": "am start -n {package}/{component} --es redirect <internal>"

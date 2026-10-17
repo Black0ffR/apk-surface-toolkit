@@ -3,7 +3,7 @@
 
 .method public onCreate(Landroid/os/Bundle;)V
     .locals 3
-    iget v2, p0, Lcom/example/app/MainActivity;->mTag:I
+    invoke-custom {v2}, Lcom/example/app/Other;->noop()V
     invoke-virtual {p0}, Landroid/app/Activity;->getIntent()Landroid/content/Intent;
     move-result-object v0
     const-string v1, "url"

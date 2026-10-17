@@ -3,6 +3,6 @@
 
 .method public read()I
     .locals 2
-    iget v0, p0, Lcom/example/app/Other;->f:I
+    invoke-custom {v0}, Lcom/example/app/Other;->noop()V
     return v0
 .end method

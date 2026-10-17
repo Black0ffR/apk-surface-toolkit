@@ -588,7 +588,7 @@ class TestSanitizers(unittest.TestCase):
         bad = _class("Lcom/example/app/Bad;", """\
 .method public static sanitize(Ljava/lang/String;)Ljava/lang/String;
     .locals 2
-    iget v1, p0, Lcom/example/app/Bad;->f:I
+    invoke-custom {v1}, Lcom/example/app/Bad;->noop()V
     return-object p0
 .end method
 """)
@@ -996,6 +996,46 @@ class TestCoverageCounters(unittest.TestCase):
         stage = _taint_stage(stats)
         self.assertFalse(stage["complete"])
         self.assertIn("class", stage["reason"].lower())
+
+
+class TestSelfRelaunchInterprocedural(unittest.TestCase):
+    _BODY = (
+        "    invoke-virtual {p0}, Landroid/app/Activity;->getIntent()"
+        "Landroid/content/Intent;\n"
+        "    move-result-object v0\n"
+        "    invoke-virtual {p0, v0}, Landroid/content/Context;->startActivity"
+        "(Landroid/content/Intent;)V\n")
+
+    def _scan(self, body, **extra):
+        params = {"sources": [{"name": "getIntent", "match": "name"}],
+                  "sinks": [{"name": "startActivity", "match": "name"}],
+                  "interprocedural": True, "cap": 15}
+        params.update(extra)
+        rule = R.Rule({"id": "AS-0034", "title": "t", "kind": "smali-taint",
+                       "severity": "high", "params": params,
+                       "recommendation": "x"}, path="synthetic")
+        main = _class("Lcom/example/app/MainActivity;",
+                      ".method public onCreate(Landroid/os/Bundle;)V\n"
+                      "    .locals 2\n" + body
+                      + "    return-void\n.end method\n")
+        with tempfile.TemporaryDirectory() as td:
+            _write_smali(td, MAIN_REL, main)
+            stats: dict = {}
+            out = TS.scan(td, [rule], stats=stats)
+        return out, stats
+
+    def test_interprocedural_relaunch_annotated_by_default(self):
+        out, stats = self._scan(self._BODY)
+        self.assertEqual(len(out), 1, out)
+        self.assertTrue(out[0]["detail"]["self_relaunch"])
+        self.assertEqual(stats["self_relaunch"], 1)
+        self.assertEqual(stats["self_relaunch_suppressed"], 0)
+
+    def test_interprocedural_relaunch_suppressed_on_opt_in(self):
+        out, stats = self._scan(self._BODY, suppress_self_relaunch=True)
+        self.assertEqual(out, [])
+        self.assertEqual(stats["self_relaunch"], 1)
+        self.assertEqual(stats["self_relaunch_suppressed"], 1)
 
 
 if __name__ == "__main__":

@@ -78,6 +78,19 @@ _INTEROP_COUNTERS = ("unresolved_calls", "sanitizers_unverified",
                      "summaries_incomplete", "ambiguous_methods",
                      "sanitizer_passages", "summaries_built")
 
+# Intent setters that rebind a navigation target. When one appears between
+# a `getIntent()` source and a start* sink, the launched component is no
+# longer the caller's own intent: it is a genuine redirect, not the benign
+# `finish(); startActivity(getIntent())` self-relaunch idiom.
+_INTENT_REBIND = frozenset({
+    "setComponent", "setClassName", "setClass", "setData", "setDataAndType",
+    "setAction", "setPackage", "setType", "setIdentifier",
+})
+_SELF_RELAUNCH_SINKS = frozenset({
+    "startActivity", "startActivityForResult", "startActivityIfNeeded",
+    "startNextMatchingActivity", "startService",
+})
+
 
 class _UnknownType:
     """Three-valued marker: the value may or may not be tainted (unmodeled).
@@ -335,6 +348,53 @@ def _transfer(block, items: list[dict], in_state: dict,
             continue
         if opcode == "fill-array-data":
             state[item["registers"][0]] = UNKNOWN
+            continue
+        if opcode == "move-exception":
+            # A caught exception object is a fresh value, not one of our
+            # sources: a clean kill (mirrors new-instance). Must precede the
+            # generic `move` branch (its opcode starts with "move").
+            state.pop(item["registers"][0], None)
+            continue
+        if opcode.startswith(("iget", "sget")):
+            # Field reads are unmodeled (like array reads): unknown, never a
+            # proven-clean kill.
+            reg = item["registers"][0]
+            for d in (_wide_pair(reg) if "wide" in opcode else [reg]):
+                state[d] = UNKNOWN
+            continue
+        if opcode.startswith(("iput", "sput", "aput")):
+            # Field/array writes define no local register.
+            continue
+        if opcode.startswith("filled-new-array"):
+            pending_src = None
+            continue
+        if opcode.split("/")[0] in SP.PROPAGATE_OPS:
+            # Arithmetic/shift/convert/compare/array-length/instance-of: the
+            # destination is derived from its sources, so taint propagates
+            # (union of source entries); with no taint it is a clean def.
+            regs = item["registers"]
+            dst, srcs = regs[0], regs[1:]
+            wide = "-long" in opcode or "-double" in opcode
+            dsts = _wide_pair(dst) if wide else [dst]
+            value = None
+            unknown = False
+            for s in srcs:
+                for ss in (_wide_pair(s) if wide else [s]):
+                    v = state.get(ss)
+                    if isinstance(v, tuple) and v:
+                        value = _sorted_entries(list(value or ()) + list(v))
+                    elif v is UNKNOWN:
+                        unknown = True
+            for d in dsts:
+                state.pop(d, None)
+            if value is not None:
+                for d in dsts:
+                    state[d] = _sorted_entries(
+                        {**e, "path": list(e.get("path") or []) + [d]}
+                        for e in value)
+            elif unknown:
+                for d in dsts:
+                    state[d] = UNKNOWN
             continue
         if opcode.startswith("move"):
             dst, src = item["registers"]
@@ -722,6 +782,39 @@ def _operand_pos(item: dict, key: tuple, param_index: int):
     return pos
 
 
+def _rebind_lines(items, base_ln: int) -> list:
+    """Absolute lines of Intent-rebinding invokes in a parsed method body."""
+    out = []
+    for it in items or ():
+        if it.get("status") != SP.PARSED:
+            continue
+        ref = it.get("ref")
+        if (ref is not None
+                and str(it.get("opcode", "")).startswith("invoke")
+                and ref.get("name") in _INTENT_REBIND):
+            out.append(base_ln + it["line"])
+    return out
+
+
+def _self_relaunch(source_match, sink_match, src_line, sink_line,
+                   rebind_lines) -> bool:
+    """True for the benign `startActivity(getIntent())` self-relaunch idiom.
+
+    A flow qualifies only when the source is `getIntent()` (the caller's own
+    intent), the sink is a component-start entry point, and no Intent
+    rebinding setter runs between them. Anything else stays a redirect.
+    """
+    if (source_match or {}).get("name") != "getIntent":
+        return False
+    if (sink_match or {}).get("name") not in _SELF_RELAUNCH_SINKS:
+        return False
+    if not isinstance(src_line, int) or not isinstance(sink_line, int):
+        return False
+    lo, hi = (src_line, sink_line) if src_line <= sink_line \
+        else (sink_line, src_line)
+    return not any(lo <= ln <= hi for ln in rebind_lines)
+
+
 def _ip_suppressed(entry: dict, sink: dict) -> bool:
     tag = entry.get("sanitized")
     if not tag:
@@ -1034,6 +1127,44 @@ def _ip_transfer(block, items: list, in_state: dict, ctx: dict):
         if opcode == "fill-array-data":
             state[item["registers"][0]] = UNKNOWN
             continue
+        if opcode == "move-exception":
+            state.pop(item["registers"][0], None)
+            continue
+        if opcode.startswith(("iget", "sget")):
+            reg = item["registers"][0]
+            for d in (_wide_pair(reg) if "wide" in opcode else [reg]):
+                state[d] = UNKNOWN
+            continue
+        if opcode.startswith(("iput", "sput", "aput")):
+            continue
+        if opcode.startswith("filled-new-array"):
+            pending = None
+            continue
+        if opcode.split("/")[0] in SP.PROPAGATE_OPS:
+            regs = item["registers"]
+            dst, srcs = regs[0], regs[1:]
+            wide = "-long" in opcode or "-double" in opcode
+            dsts = _wide_pair(dst) if wide else [dst]
+            value = None
+            unknown = False
+            for s in srcs:
+                for ss in (_wide_pair(s) if wide else [s]):
+                    v = state.get(ss)
+                    if isinstance(v, tuple) and v:
+                        value = _sorted_entries(list(value or ()) + list(v))
+                    elif v is UNKNOWN:
+                        unknown = True
+            for d in dsts:
+                state.pop(d, None)
+            if value is not None:
+                for d in dsts:
+                    state[d] = _sorted_entries(
+                        {**e, "path": list(e.get("path") or []) + [d]}
+                        for e in value)
+            elif unknown:
+                for d in dsts:
+                    state[d] = UNKNOWN
+            continue
         if opcode.startswith("move"):
             dst, src = item["registers"]
             dsts = _wide_pair(dst) if "wide" in opcode else [dst]
@@ -1188,6 +1319,8 @@ def _scan_interprocedural(base: str, decoded: str, rule, src_matchers: list,
                           totals: dict) -> list:
     """TF-02 Stage 4 scan for one opt-in rule; findings + totals in place."""
     out: list = []
+    suppress_relaunch = bool(
+        (getattr(rule, "params", None) or {}).get("suppress_self_relaunch"))
     paths = _iter_smali_files(base, include_vendor, skip_dirs)
     metas: list = []
     defined: dict = {}
@@ -1296,9 +1429,18 @@ def _scan_interprocedural(base: str, decoded: str, rule, src_matchers: list,
             pieces = _coverage_pieces(coverage)
             gap_text = ("; " + "; ".join(pieces)) if pieces else ""
             sig = _call_sig((owner, name, descriptor))
+            rebind = _rebind_lines(items, base_ln)
             for hit in hits:
                 if hit.get("event"):
                     continue
+                self_relaunch = _self_relaunch(
+                    hit.get("source_match"), hit.get("sink_match"),
+                    hit.get("src_line"), hit.get("sink_line"), rebind)
+                if self_relaunch:
+                    totals["self_relaunch"] += 1
+                    if suppress_relaunch:
+                        totals["self_relaunch_suppressed"] += 1
+                        continue
                 via = tuple(hit.get("via") or ())
                 cross = bool(via) or (hit.get("src_file")
                                       != hit.get("sink_file"))
@@ -1309,6 +1451,8 @@ def _scan_interprocedural(base: str, decoded: str, rule, src_matchers: list,
                                " see limitations" if cross else
                                "intra-method CFG fixed-point scan;"
                                " see limitations") + gap_text})
+                if self_relaunch:
+                    scope["classification"] = "self-relaunch"
                 evidence = (f"{rel}:{sig}: tainted {hit['reg']} "
                             f"from {hit['src_method']} reaches {hit['sink']}")
                 if via:
@@ -1329,7 +1473,8 @@ def _scan_interprocedural(base: str, decoded: str, rule, src_matchers: list,
                            "sink_file": hit["sink_file"],
                            "cross_method": cross,
                            "via": list(via),
-                           "analysis": scope}))
+                           "analysis": scope,
+                           **({"self_relaunch": True} if self_relaunch else {})}))
                 hits_so_far += 1
                 totals["hits"] += 1
                 if hits_so_far >= cap:
@@ -1371,7 +1516,8 @@ def scan(decoded: str, rules: list, limit_default: int = 15,
               "cfg_capped_any": False,
               "unresolved_calls": 0, "sanitizers_unverified": 0,
               "summaries_incomplete": 0, "ambiguous_methods": 0,
-              "sanitizer_passages": 0, "summaries_built": 0}
+              "sanitizer_passages": 0, "summaries_built": 0,
+              "self_relaunch": 0, "self_relaunch_suppressed": 0}
     if not decoded or not os.path.isdir(decoded):
         if stats is not None:
             stats.update(totals)
@@ -1395,6 +1541,7 @@ def scan(decoded: str, rules: list, limit_default: int = 15,
         except (re.error, ValueError, TypeError) as e:
             out.append(R.finding(r, evidence=f"bad taint matcher: {e}"))
             continue
+        suppress_relaunch = bool(r.params.get("suppress_self_relaunch"))
         base = os.path.join(decoded, r.params.get("root", "."))
         if not os.path.isdir(base):
             continue
@@ -1449,14 +1596,26 @@ def scan(decoded: str, rules: list, limit_default: int = 15,
                         totals["cfg_capped_any"] = True
                     pieces = _coverage_pieces(mcounters)
                     gap_text = ("; " + "; ".join(pieces)) if pieces else ""
+                    rebind = _rebind_lines(SP.parse_lines(block), base_ln)
                     for h in found:
                         relp = os.path.relpath(p, decoded)
+                        self_relaunch = _self_relaunch(
+                            h.get("source_match"), h.get("sink_match"),
+                            base_ln + h["src_line"],
+                            base_ln + h["sink_line"], rebind)
+                        if self_relaunch:
+                            totals["self_relaunch"] += 1
+                            if suppress_relaunch:
+                                totals["self_relaunch_suppressed"] += 1
+                                continue
                         scope = analysis_scope()
                         scope.update({"status": "partial",
                                       "truncated": False,
                                       "reason": ("intra-method CFG fixed-point "
                                                  "scan; see limitations"
                                                  + gap_text)})
+                        if self_relaunch:
+                            scope["classification"] = "self-relaunch"
                         out.append(R.finding(
                             r, file=relp,
                             evidence=(f"{relp}:{sig}: tainted {h['reg']} "
@@ -1472,7 +1631,9 @@ def scan(decoded: str, rules: list, limit_default: int = 15,
                                    "sink_owner": h["sink_owner"],
                                    "source_match": h["source_match"],
                                    "sink_match": h["sink_match"],
-                                   "analysis": scope}))
+                                   "analysis": scope,
+                                   **({"self_relaunch": True}
+                                      if self_relaunch else {})}))
                         hits += 1
                         totals["hits"] += 1
                         if hits >= cap:
