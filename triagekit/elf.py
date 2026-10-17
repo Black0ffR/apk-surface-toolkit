@@ -87,7 +87,12 @@ def parse(data: bytes) -> ElfImage:
     (e_type, e_machine, _ver, e_entry, e_phoff, _shoff, _flags,
      _ehsize, e_phentsize, e_phnum, e_shentsize, e_shnum, _shstrndx) = \
         struct.unpack_from(end + ehdr_extra, data, 16)
-    phfmt = end + ("IIQQQQIQ" if is64 else "IIIIIIII")
+    # ELF64 phdr: p_type, p_flags, p_offset, p_vaddr, p_paddr, p_filesz,
+    # p_memsz, p_align (p_flags is the SECOND field). ELF32 phdr differs:
+    # p_type, p_offset, p_vaddr, p_paddr, p_filesz, p_memsz, p_flags,
+    # p_align. Keep the two layouts distinct — a single shared order
+    # silently misreads ELF64 (flags<->offset<->filesz) as ELF32.
+    phfmt = end + ("IIQQQQQQ" if is64 else "IIIIIIII")
     phentsize = struct.calcsize(phfmt)
     if e_phnum and e_phentsize < phentsize:
         raise ElfFormatError(
@@ -103,7 +108,7 @@ def parse(data: bytes) -> ElfImage:
         if off + phentsize > len(data):
             raise ElfFormatError("truncated program header")
         if is64:
-            p_type, p_offset, p_vaddr, _pa, p_filesz, p_memsz, p_flags, \
+            p_type, p_flags, p_offset, p_vaddr, _pa, p_filesz, p_memsz, \
                 p_align = struct.unpack_from(phfmt, data, off)
         else:
             (p_type, p_offset, p_vaddr, _pa, p_filesz, p_memsz,

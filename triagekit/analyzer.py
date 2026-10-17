@@ -1000,14 +1000,23 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     bad = apktools.badging(apk)
     pk = apktools.packer(apk)
     packed = apktools.packed_verdict(pk, st)
-    if not packed:
-        # No packer strings, but encrypted blobs still hide code: windowed
-        # entropy + chi-square contrast gate over dex/.so (stdlib only).
-        from . import entropy as ENT
-        enc = ENT.scan_apk(apk)
-        if enc:
-            packed = [f"high-entropy regions ({', '.join(e['file'] for e in enc[:3])})"]
-            st["entropy_regions"] = enc
+    # Windowed entropy over dex/.so (stdlib only). A high-entropy region is
+    # only a CODE-BLINDING signal when it is a sustained whole-region
+    # payload inside a classes*.dex. A high-entropy region confined to a
+    # native lib is evidence about that lib, not a reason to skip the smali
+    # code rules (the previous behaviour blinded the whole app on one
+    # crypto lib's constant table).
+    from . import entropy as ENT
+    enc = ENT.scan_apk(apk)
+    native_entropy: list[dict] = []
+    if enc:
+        st["entropy_regions"] = enc
+        dex_enc = [e for e in enc
+                   if e.get("region_kind") == "dex" and e.get("encrypted")]
+        native_entropy = [e for e in enc if e.get("region_kind") == "native"]
+        if dex_enc and not packed:
+            packed = [f"high-entropy DEX regions "
+                      f"({', '.join(e['file'] for e in dex_enc[:3])})"]
 
     # aapt2 can supply identity when the manifest could not be decoded
     package = man.get("package") or bad.get("package", "")
@@ -1045,6 +1054,23 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
                 "maswe": None, "static_only": True,
                 "verification": {"status": "n/a", "script": None},
             })
+
+    if native_entropy:
+        findings.append({
+            "id": "NA-ENT-0001", "tool": "apk-surface", "rule": "NA-ENT-0001",
+            "title": "Higher-entropy region inside a native library",
+            "severity": "info", "kind": "integrity", "component": "", "file": "",
+            "evidence": ("high-entropy native region(s): "
+                         + ", ".join(e["file"] for e in native_entropy[:3])
+                         + f" (states: "
+                         + ", ".join(sorted({e.get('state', '?')
+                                             for e in native_entropy})) + ")"),
+            "recommendation": ("The native payload is opaque to static analysis; carve/decrypt "
+                               "before drawing native conclusions. Smali code rules still ran - "
+                               "this is NOT a code-blinding packer signal."),
+            "maswe": None, "static_only": True,
+            "verification": {"status": "n/a", "script": None},
+        })
 
     if decoded_ok and man:
         file_paths = mf.read_file_provider_paths(decode_dir) if (

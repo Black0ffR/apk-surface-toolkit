@@ -46,17 +46,17 @@ _ABIS = {
 _CALL_PATTERNS = {
     "x86_64": (
         re.compile(r"^\s*([0-9a-f]+):\s+(?:[0-9a-f]{2}\s+)+callq?\s+"
-                   r"([0-9a-f]+)\s+<([^>]+)>"),
+                   r"(?:0x)?([0-9a-f]+)\s+<([^>]+)>"),
         re.compile(r"^\s*([0-9a-f]+):\s+(?:[0-9a-f]{2}\s+)+callq?\s+\*"),
     ),
     "aarch64": (
         re.compile(r"^\s*([0-9a-f]+):\s+[0-9a-f]{8}\s+bl\s+"
-                   r"([0-9a-f]+)\s+<([^>]+)>"),
+                   r"(?:0x)?([0-9a-f]+)\s+<([^>]+)>"),
         re.compile(r"^\s*([0-9a-f]+):\s+[0-9a-f]{8}\s+blr\s+(\w+)"),
     ),
     "armeabi-v7a": (
         re.compile(r"^\s*([0-9a-f]+):\s+[0-9a-f]{8}\s+(?:bl|blx)\s+"
-                   r"([0-9a-f]+)\s+<([^>]+)>"),
+                   r"(?:0x)?([0-9a-f]+)\s+<([^>]+)>"),
         re.compile(r"^\s*([0-9a-f]+):\s+[0-9a-f]{8}\s+blx\s+(\w+)"),
     ),
 }

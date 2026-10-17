@@ -28,6 +28,20 @@ ARM64_TEXT = "\n".join([
     _line64("1238", "d63f0020", "blr", "x0"),
 ])
 
+# llvm-objdump prints aarch64 branch targets with a 0x prefix
+# (`bl 0x25c0 <sym>`), unlike GNU x86 objdump (bare hex). Both forms must
+# parse; the 0x form was previously a silent false negative.
+ARM64_PREFIXED_TEXT = "\n".join([
+    "0000000000002244 <my_func>:",
+    _line64("2244", "940000df", "bl", "0x25c0 <target_b>"),
+    _line64("2248", "d63f0100", "blr", "x8"),
+])
+
+ARM64_NO_SYMBOL_TEXT = "\n".join([
+    "0000000000001234 <my_func>:",
+    _line64("1234", "94000004", "bl", "1240"),
+])
+
 ARM32_TEXT = "\n".join([
     "00001234 <my_func>:",
     _line64("1234", "eb000001", "bl", "1240 <target_a>"),
@@ -70,6 +84,24 @@ class TestCallSiteParsing(unittest.TestCase):
                                     arch="aarch64")
         self.assertEqual([s["kind"] for s in sites], ["direct", "indirect"])
         self.assertEqual(sites[1]["register"], "x0")
+
+    def test_arm64_zero_x_prefixed_target_is_direct(self):
+        # Regression: llvm-objdump's `bl 0x... <sym>` must yield a direct
+        # call site (previously parsed as zero direct calls).
+        sites = NF.parse_call_sites(ARM64_PREFIXED_TEXT, function_id="fn",
+                                    arch="aarch64")
+        self.assertEqual([s["kind"] for s in sites], ["direct", "indirect"])
+        self.assertEqual(sites[0]["site"], 0x2244)
+        self.assertEqual(sites[0]["target_address"], 0x25c0)
+        self.assertEqual(sites[0]["target_symbol"], "target_b")
+        self.assertEqual(sites[1]["kind"], "indirect")
+
+    def test_arm64_branch_without_symbol_not_direct_call(self):
+        # A `bl` line lacking the `<symbol>` annotation is not a resolvable
+        # direct call and must not be invented as one.
+        sites = NF.parse_call_sites(ARM64_NO_SYMBOL_TEXT, function_id="fn",
+                                    arch="aarch64")
+        self.assertEqual(sites, [])
 
     def test_arm32_bl_and_blx(self):
         sites = NF.parse_call_sites(ARM32_TEXT, function_id="fn",

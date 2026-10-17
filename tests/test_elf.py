@@ -26,7 +26,9 @@ def _seg(off, va, fsz, msz, flags=5, align=0x1000) -> LoadSegment:
 
 _EHDR_FMT = {64: "HHIQQQIHHHHHH", 32: "HHIIIIIHHHHHH"}
 
-_PHDR_FMT = {64: "IIQQQQIQ", 32: "IIIIIIII"}
+# ELF64 program header order is type, flags, offset, vaddr, paddr,
+# filesz, memsz, align (p_flags is the SECOND field, not the seventh).
+_PHDR_FMT = {64: "IIQQQQQQ", 32: "IIIIIIII"}
 
 
 def _build(loads: list[tuple], *, elf_class: int = 64, little: bool = True,
@@ -48,9 +50,15 @@ def _build(loads: list[tuple], *, elf_class: int = 64, little: bool = True,
               len(loads) if phnum is None else phnum,
               64 if is64 else 40, shnum, 0)
     hdr = ident + struct.pack(fmt_hdr, *fields)
-    ph_row = lambda t: struct.pack(
-        phfmt, 1, t[0], t[1], t[1], t[2], t[3],
-        t[4] if len(t) > 4 else 5, t[5] if len(t) > 5 else 0x1000)
+    def ph_row(t: tuple) -> bytes:
+        off, va, fsz, msz = t[0], t[1], t[2], t[3]
+        flags = t[4] if len(t) > 4 else 5
+        align = t[5] if len(t) > 5 else 0x1000
+        if is64:
+            # ELF64: type, flags, offset, vaddr, paddr, filesz, memsz, align
+            return struct.pack(phfmt, 1, flags, off, va, va, fsz, msz, align)
+        # ELF32: type, offset, vaddr, paddr, filesz, memsz, flags, align
+        return struct.pack(phfmt, 1, off, va, va, fsz, msz, flags, align)
     ph = b"".join(ph_row(t) for t in loads)
     return hdr + ph
 
@@ -178,6 +186,28 @@ class TestParse(unittest.TestCase):
         self.assertEqual(img.loads[0].virtual_address, 0x10000)
         self.assertEqual(img.loads[1].memory_size, 0x1000)
         self.assertEqual(img.machine_name, "aarch64")
+
+    def test_elf64_phdr_field_order(self):
+        # Regression: ELF64 p_flags is the second field. A parser that
+        # assigns fields in ELF32 order misreads flags/offset/filesz and
+        # can reject a valid segment. Distinct values catch the shift.
+        data = _build([(0x1000, 0x20000, 0x800, 0x1000, 0x6, 0x1000)])
+        img = ELF.parse(data)
+        seg = img.loads[0]
+        self.assertEqual(seg.file_offset, 0x1000)
+        self.assertEqual(seg.virtual_address, 0x20000)
+        self.assertEqual(seg.file_size, 0x800)
+        self.assertEqual(seg.memory_size, 0x1000)
+        self.assertEqual(seg.flags, 0x6)
+        self.assertEqual(seg.alignment, 0x1000)
+
+    def test_elf64_filesz_less_than_memsz_accepted(self):
+        # Valid BSS tail: filesz < memsz must parse (the reported bug was a
+        # valid segment being rejected as "filesz exceeds memsz").
+        data = _build([(0x0, 0x0, 0xa70, 0xa80)])
+        img = ELF.parse(data)
+        self.assertEqual(img.loads[0].file_size, 0xa70)
+        self.assertEqual(img.loads[0].memory_size, 0xa80)
 
     def test_elf32_little(self):
         data = _build([(0x0, 0x8000, 0x400, 0x400)], elf_class=32)
