@@ -248,7 +248,7 @@ def _h_arith(opcode: str, operands: str):
         if len(parts) == 2 and all(_REG_RE.match(p) for p in parts):
             return {"registers": parts}, ""
         return None, "expected two registers for %r" % (opcode,)
-    if suffix in ("lit8", "lit16"):
+    if suffix in ("lit8", "lit16") or opcode == "rsub-int":
         if (len(parts) == 3 and _REG_RE.match(parts[0])
                 and _REG_RE.match(parts[1])):
             return {"registers": [parts[0], parts[1]]}, ""

@@ -304,6 +304,12 @@ class TestExpandedGrammar(unittest.TestCase):
         self.assertEqual(item["opcode"], "rsub-int/lit8")
         self.assertEqual(item["registers"], ["v5", "v0"])
 
+    def test_rsub_int_is_lit16_form(self):
+        item = SP.parse_line("    rsub-int p0, p0, 0x280")
+        self.assertEqual(item["status"], "parsed")
+        self.assertEqual(item["opcode"], "rsub-int")
+        self.assertEqual(item["registers"], ["p0", "p0"])
+
     def test_array_typed_invoke_owner_is_parsed(self):
         for line, owner in (
             ("    invoke-virtual {v0}, [Lapp/fast/ssh/X;->clone()Ljava/lang/Object;",
