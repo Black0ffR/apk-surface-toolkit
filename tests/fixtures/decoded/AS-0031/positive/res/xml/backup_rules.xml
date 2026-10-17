@@ -1,0 +1,5 @@
+<data-extraction-rules>
+    <cloud-backup>
+        <include domain="root" path="."/>
+    </cloud-backup>
+</data-extraction-rules>

@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <application android:label="Fixture">
+        <meta-data android:name="API_KEY" android:value="pk_test_12345"/>
+    </application>
+</manifest>

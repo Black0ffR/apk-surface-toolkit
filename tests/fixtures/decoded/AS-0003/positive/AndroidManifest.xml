@@ -1,0 +1,9 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <application android:label="Fixture">
+        <provider android:name=".LeakyProvider"
+            android:authorities="com.example.app.leaky" android:exported="true"/>
+        <provider android:name=".MyFileProvider"
+            android:authorities="com.example.app.files" android:exported="true"/>
+    </application>
+</manifest>

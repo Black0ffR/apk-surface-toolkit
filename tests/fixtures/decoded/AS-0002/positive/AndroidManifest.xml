@@ -1,0 +1,11 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <application android:label="Fixture">
+        <activity android:name=".OwnNamespace"
+            android:permission="com.example.app.permission.MISSING"/>
+        <activity android:name=".AndroidUnknown"
+            android:permission="android.permission.NOT_A_REAL_PERM"/>
+        <activity android:name=".ThirdParty"
+            android:permission="com.other.vendor.permission.THING"/>
+    </application>
+</manifest>

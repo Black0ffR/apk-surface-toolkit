@@ -1,0 +1,6 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <uses-sdk android:targetSdkVersion="30"/>
+    <application android:label="Fixture"
+        android:networkSecurityConfig="@xml/network_security_config"/>
+</manifest>

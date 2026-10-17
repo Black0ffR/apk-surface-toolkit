@@ -1,0 +1,8 @@
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system"/>
+            <vendor-anchors src="corp"/>
+        </trust-anchors>
+    </base-config>
+</network-security-config>

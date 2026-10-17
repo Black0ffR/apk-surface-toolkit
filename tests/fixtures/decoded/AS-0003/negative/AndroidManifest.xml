@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.app">
+    <application android:label="Fixture">
+        <provider android:name=".GuardedProvider"
+            android:authorities="com.example.app.guarded" android:exported="true"
+            android:readPermission="android.permission.READ_EXTERNAL_STORAGE"/>
+    </application>
+</manifest>
