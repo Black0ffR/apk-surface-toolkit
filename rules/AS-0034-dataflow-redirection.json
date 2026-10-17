@@ -7,8 +7,20 @@
   "maswe": "MASWE-0032",
   "tags": ["ipc", "intent-redirection", "dataflow"],
   "params": {
-    "sources": ["getIntent", "getParcelableExtra", "getSerializableExtra", "getStringExtra", "getData"],
-    "sinks": ["startActivity", "startService", "sendBroadcast", "setClass"],
+    "sources": [
+      {"name": "getIntent", "match": "name"},
+      {"name": "getParcelableExtra", "match": "name"},
+      {"name": "getSerializableExtra", "match": "name"},
+      {"name": "getStringExtra", "match": "name"},
+      {"name": "getData", "match": "name"}
+    ],
+    "sinks": [
+      {"name": "startActivity", "match": "name"},
+      {"name": "startService", "match": "name"},
+      {"name": "sendBroadcast", "match": "name"},
+      {"name": "setClass", "match": "name"}
+    ],
+    "interprocedural": true,
     "cap": 15
   },
   "recommendation": "Never let an inbound extra select the target component/action. Allow-list destinations.",

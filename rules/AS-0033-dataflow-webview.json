@@ -7,8 +7,18 @@
   "maswe": "MASWE-0035",
   "tags": ["webview", "dataflow"],
   "params": {
-    "sources": ["getIntent", "getData", "getStringExtra", "getParcelableExtra", "getSerializableExtra"],
-    "sinks": ["loadUrl", "addJavascriptInterface"],
+    "sources": [
+      {"name": "getIntent", "match": "name"},
+      {"name": "getData", "match": "name"},
+      {"name": "getStringExtra", "match": "name"},
+      {"name": "getParcelableExtra", "match": "name"},
+      {"name": "getSerializableExtra", "match": "name"}
+    ],
+    "sinks": [
+      {"name": "loadUrl", "match": "name"},
+      {"name": "addJavascriptInterface", "match": "name"}
+    ],
+    "interprocedural": true,
     "cap": 15
   },
   "recommendation": "Validate the URI/origin before loading; disable file access unless needed.",
