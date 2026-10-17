@@ -4,10 +4,232 @@ from __future__ import annotations
 import os
 import re
 
-from . import apktools, manifest as mf, rules as R
+from . import apktools, evidence as EV, manifest as mf, rules as R
 from .utils import now, sha256, workspace, write_json
 
 DEFAULT_RULES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "rules")
+
+
+ANALYSIS_STATUSES = ("complete", "partial", "not_analysed")
+
+
+def _code_skip_reason(*, do_regex: bool, packed: list, manifest_only: bool,
+                      decoded_ok: bool, has_manifest: bool) -> str:
+    if not decoded_ok or not has_manifest:
+        return "no decoded manifest available"
+    if packed:
+        return "sample is packed; code rules are blind"
+    if manifest_only:
+        return "manifest-only decode; no smali available"
+    if not do_regex:
+        return "code rules skipped (--no-regex)"
+    return ""
+
+
+def compute_stages(*, decoded_ok: bool, has_manifest: bool,
+                   manifest_only: bool, do_regex: bool, packed: list,
+                   has_so_files: bool, kinds_present: set,
+                   taint_stats: dict | None = None,
+                   reach_coverage: dict | None = None,
+                   regex_stats: dict | None = None,
+                   native_stats: dict | None = None) -> list[dict]:
+    """Per-stage execution vs completeness records (pure, no I/O).
+
+    Each stage reports `ran` (did it execute) independently from `complete`
+    (did it finish without truncation/gaps). Native is `ran` only when `.so`
+    files exist; a package without native libraries reports native as not
+    run but complete (nothing to analyse), never as a failure.
+    """
+    packed = list(packed or [])
+    kinds_present = set(kinds_present or [])
+    skip_reason = _code_skip_reason(do_regex=do_regex, packed=packed,
+                                    manifest_only=manifest_only,
+                                    decoded_ok=decoded_ok,
+                                    has_manifest=has_manifest)
+    code_base = not skip_reason
+    taint_stats = taint_stats or {}
+    reach_coverage = reach_coverage or {}
+    regex_stats = regex_stats or {}
+    native_stats = native_stats or {}
+
+    if not decoded_ok:
+        manifest = {"stage": "manifest", "ran": False, "complete": False,
+                    "reason": "decode failed or was unavailable"}
+    elif not has_manifest:
+        manifest = {"stage": "manifest", "ran": True, "complete": False,
+                    "reason": "manifest parsed empty"}
+    else:
+        manifest = {"stage": "manifest", "ran": True, "complete": True, "reason": ""}
+
+    def _code_stage(name: str, kind: str, complete: bool, incomplete_reason: str) -> dict:
+        if kind not in kinds_present:
+            return {"stage": name, "ran": False, "complete": True,
+                    "reason": f"no {kind} rules loaded (nothing to run)"}
+        if not code_base:
+            return {"stage": name, "ran": False, "complete": False,
+                    "reason": skip_reason}
+        if not complete:
+            return {"stage": name, "ran": True, "complete": False,
+                    "reason": incomplete_reason}
+        return {"stage": name, "ran": True, "complete": True, "reason": ""}
+
+    regex = _code_stage("regex", "regex",
+                        (not regex_stats.get("truncated_any", False)
+                         and not regex_stats.get("files_truncated", False)),
+                        "; ".join(
+                            (["regex hit cap reached; results truncated"]
+                             if regex_stats.get("truncated_any") else [])
+                            + ([f"{regex_stats['files_truncated']} file(s) "
+                                "truncated at the 500 KB multiline read cap"]
+                               if regex_stats.get("files_truncated") else [])))
+    taint_problems = []
+    if taint_stats.get("unsupported_instructions"):
+        taint_problems.append(
+            f"{taint_stats['unsupported_instructions']} unsupported instruction(s)")
+    if taint_stats.get("malformed_instructions"):
+        taint_problems.append(
+            f"{taint_stats['malformed_instructions']} malformed instruction(s)")
+    if taint_stats.get("methods_skipped"):
+        taint_problems.append(f"{taint_stats['methods_skipped']} skipped method(s)")
+    if taint_stats.get("files_no_class"):
+        taint_problems.append(
+            f"{taint_stats['files_no_class']} smali file(s) without a class "
+            "declaration skipped")
+    cfg_problems = []
+    if taint_stats.get("missing_labels"):
+        cfg_problems.append(
+            f"{taint_stats['missing_labels']} missing branch label(s)")
+    if taint_stats.get("unresolved_switches"):
+        cfg_problems.append(
+            f"{taint_stats['unresolved_switches']} unresolved switch(es)")
+    interop_problems = []
+    if taint_stats.get("unresolved_calls"):
+        interop_problems.append(
+            f"{taint_stats['unresolved_calls']} unresolved call(s)")
+    if taint_stats.get("sanitizers_unverified"):
+        interop_problems.append(
+            f"{taint_stats['sanitizers_unverified']} unverified sanitizer call(s)")
+    if taint_stats.get("summaries_incomplete"):
+        interop_problems.append(
+            f"{taint_stats['summaries_incomplete']} incomplete summary(ies)")
+    if taint_stats.get("ambiguous_methods"):
+        interop_problems.append(
+            f"{taint_stats['ambiguous_methods']} ambiguous method identity(ies)")
+    cfg_capped = bool(taint_stats.get("cfg_capped_any", False))
+    taint_truncated_files = int(taint_stats.get("files_truncated", 0) or 0)
+    taint_complete = (not taint_stats.get("truncated_any", False)
+                      and not taint_problems and not cfg_problems
+                      and not interop_problems
+                      and not cfg_capped
+                      and not taint_truncated_files)
+    taint_reason = "; ".join(
+        (["taint hit cap reached; results truncated"]
+         if taint_stats.get("truncated_any") else [])
+        + ([f"{taint_truncated_files} file(s) truncated at the 500 KB read cap"]
+           if taint_truncated_files else [])
+        + (["CFG fixed-point visit cap reached; results truncated"]
+           if cfg_capped else [])
+        + (["parser coverage gaps: " + "; ".join(taint_problems)]
+           if taint_problems else [])
+        + (["CFG coverage gaps: " + "; ".join(cfg_problems)]
+           if cfg_problems else [])
+        + (["interprocedural gaps: " + "; ".join(interop_problems)]
+           if interop_problems else []))
+    taint = _code_stage("smali-taint", "smali-taint", taint_complete, taint_reason)
+
+    build_stats = reach_coverage.get("build_stats", {}) if reach_coverage else {}
+    parse_problems = []
+    if build_stats.get("files_truncated"):
+        parse_problems.append(
+            f"{build_stats['files_truncated']} file(s) truncated at the 500 KB read cap")
+    if build_stats.get("malformed_methods"):
+        parse_problems.append(f"{build_stats['malformed_methods']} malformed method(s)")
+    if build_stats.get("unparsed_invokes"):
+        parse_problems.append(f"{build_stats['unparsed_invokes']} unparsed invoke(s)")
+    if build_stats.get("calls_legacy_fallback"):
+        parse_problems.append(f"{build_stats['calls_legacy_fallback']} approximate fallback invoke(s)")
+    reach_complete = (not reach_coverage.get("traversal_truncated_any", False)
+                      and not reach_coverage.get("hit_cap_truncated_any", False)
+                      and not parse_problems)
+    reach_reason = "; ".join(
+        (["traversal truncated (reachable-method limit reached)"]
+         if reach_coverage.get("traversal_truncated_any") else [])
+        + (["hit cap reached"] if reach_coverage.get("hit_cap_truncated_any") else [])
+        + (["parser coverage gaps: " + "; ".join(parse_problems)] if parse_problems else []))
+    reachability = _code_stage("reachability", "reachability", reach_complete, reach_reason)
+
+    if "native" not in kinds_present and "regex" not in kinds_present:
+        # Native findings reuse regex-kind rule metadata (AS-0016/AS-0021);
+        # without those rules there is nothing to score native strings with.
+        native = {"stage": "native", "ran": False, "complete": True,
+                  "reason": "no scoring rules loaded (nothing to run)"}
+    elif not code_base:
+        native = {"stage": "native", "ran": False, "complete": False, "reason": skip_reason}
+    elif not has_so_files:
+        native = {"stage": "native", "ran": False, "complete": True,
+                  "reason": "no native libraries in package (nothing to analyse)"}
+    else:
+        native_problems = []
+        if native_stats.get("truncated_any", False):
+            native_problems.append("native hit cap reached")
+        if native_stats.get("files_skipped"):
+            native_problems.append(
+                f"{native_stats['files_skipped']} library(ies) beyond the 20-file scan cap")
+        if native_stats.get("files_truncated"):
+            native_problems.append(
+                f"{native_stats['files_truncated']} library(ies) truncated at the 8 MB read cap")
+        if native_stats.get("read_errors"):
+            native_problems.append(
+                f"{native_stats['read_errors']} unreadable library entry(ies)")
+        if native_stats.get("carve_errors"):
+            native_problems.append(
+                f"{native_stats['carve_errors']} library carve failure(s)")
+        native_complete = not native_problems
+        native = {"stage": "native",
+                  "ran": True, "complete": native_complete,
+                  "reason": "; ".join(native_problems)}
+
+    return [manifest, regex, taint, reachability, native]
+
+
+def build_analysis_status(*, decoded_ok: bool, manifest_only: bool,
+                          packed: list, rule_errors: list,
+                          stages: list[dict]) -> dict:
+    """Additive analysis scope/status record (pure, no I/O).
+
+    Status vocabulary: `complete` (every applicable stage finished),
+    `partial` (some scope skipped, capped, or invalid), `not_analysed` (no
+    stage ran at all). Execution (`ran`) and completeness (`complete`) come
+    from `compute_stages`. A negative finding set under `partial` is
+    inconclusive, never proof of absence.
+    """
+    packed = list(packed or [])
+    rule_errors = list(rule_errors or [])
+    stages = [dict(s) for s in (stages or [])]
+    limitations = [
+        "smali taint is an intra-method CFG fixed-point register scan; "
+        "interprocedural summaries are opt-in and bounded",
+        "call-graph edges are approximate static references; reachability is a hypothesis until probed",
+        "native carving/entropy outputs are heuristic candidates, not verified findings",
+        "third-party/vendor smali excluded unless a rule opts back in",
+    ]
+    if manifest_only:
+        limitations.append("manifest-only decode: no smali was available, code rules did not run")
+    if packed:
+        limitations.append(f"packed/protected sample ({', '.join(packed)}): code-level rules are blind")
+    if rule_errors:
+        limitations.append(f"{len(rule_errors)} rule file(s) failed validation; related coverage is missing")
+    for s in stages:
+        if s.get("ran") and not s.get("complete") and s.get("reason"):
+            limitations.append(f"{s['stage']} incomplete: {s['reason']}")
+    if not any(s.get("ran") for s in stages):
+        status = "not_analysed"
+    elif (all(s.get("complete") for s in stages) and not packed
+            and not manifest_only and not rule_errors):
+        status = "complete"
+    else:
+        status = "partial"
+    return {"status": status, "stages": stages, "limitations": limitations}
 
 
 # --------------------------------------------------------------- rule checks
@@ -58,6 +280,30 @@ def _is_launcher(comp: dict) -> bool:
                 and "android.intent.category.LAUNCHER" in cats):
             return True
     return False
+
+
+def nsc_blind_findings(nsc: list[dict]) -> list[dict]:
+    """Blind-spot entry when a network security config could not be parsed.
+
+    An unreadable trust-critical config makes NSC-based findings (and their
+    absence) inconclusive; without this entry a clean NSC section reads as
+    "nothing to see" rather than "metadata could not be read".
+    """
+    bad = sorted({str(c.get("file", "")) for c in (nsc or [])
+                  if c.get("parse_error")})
+    if not bad:
+        return []
+    return [{
+        "id": "BLIND-0004", "tool": "apk-surface", "rule": "BLIND-0004",
+        "title": "Network security config unreadable - NSC rules are blind",
+        "severity": "info", "kind": "integrity", "component": "", "file": "",
+        "evidence": f"unparseable: {', '.join(bad)}",
+        "recommendation": ("Read the raw bytes manually (preserved in "
+                           "analysis.json): absence of NSC findings is "
+                           "inconclusive for this config."),
+        "maswe": None, "static_only": True,
+        "verification": {"status": "n/a", "script": None},
+    }]
 
 
 def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
@@ -281,6 +527,11 @@ def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
         elif c == "nsc_hardening":
             want = r.params.get("want", "")
             for cfg in nsc:
+                if cfg.get("parse_error"):
+                    # unreadable config: absence claims (no <pin-set>, no user
+                    # anchors) would be fabricated from metadata we could not
+                    # read; nsc_blind_findings() surfaces the gap instead.
+                    continue
                 if want == "user_ca":
                     for dom in cfg.get("domains", []):
                         anchors = " ".join(
@@ -294,6 +545,15 @@ def check_manifest(rules: list[R.Rule], man: dict, nsc: list[dict],
                                 r, file=cfg.get("file", ""),
                                 evidence=(f'{cfg.get("file")}: user trust anchors in '
                                           f'{dom.get("kind")} (allows user-installed CAs)'),
+                                extra={"domain": dom}))
+                        elif dom.get("unknown_trust_anchors"):
+                            unknown = ", ".join(
+                                str(u) for u in dom["unknown_trust_anchors"])
+                            out.append(R.finding(
+                                r, file=cfg.get("file", ""),
+                                evidence=(f'{cfg.get("file")}: {dom.get("kind")} trust '
+                                          f'anchors contain uninterpreted entries '
+                                          f'({unknown}); user trust cannot be excluded'),
                                 extra={"domain": dom}))
                 elif want == "no_pinning":
                     if cfg.get("pins"):
@@ -425,17 +685,35 @@ _KEY_RE = re.compile(r"(AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|AIza[0-9A-Za-z_\-]{35}
                      r"xox[baprs]-[A-Za-z0-9\-]{10,})")
 
 
-def check_native(rules_by_id: dict, apk: str, limit: int = 25) -> list[dict]:
+def check_native(rules_by_id: dict, apk: str, limit: int = 25,
+                 stats: dict | None = None) -> list[dict]:
     """Scan lib/**/*.so via carved strings + decode cascade.
 
     Reuses AS-0021 (URLs) and AS-0016 (keys) rule metadata when present.
     Decoded candidates are rescored against the same shapes, so base64/hex
-    hidden constants surface with their transform named.
+    hidden constants surface with their transform named. When `stats` is
+    given it receives `files_scanned`, `hits`, `truncated_any` (hit cap),
+    and the input-cap counters `files_skipped` (beyond the 20-file cap),
+    `files_truncated` (8 MB read cap), `read_errors` and `carve_errors`.
+
+    NA-01 provenance: every finding's detail carries the library's
+    artifact sha256, byte offset/length of the matched span, transform
+    parameters and decoded hash for decoded hits, plus explicit
+    candidate-string labels (heuristic, not runtime verified).
     """
+    import hashlib
     import zipfile
     from . import carve as CV
     out: list[dict] = []
     hits = 0
+    files_scanned = 0
+    files_skipped = 0
+    files_truncated = 0
+    read_errors = 0
+    carve_errors = 0
+    candidate_labels = {"classification": "candidate-string",
+                        "confidence": "candidate",
+                        "validation": "not_runtime_verified"}
 
     def emit(rule_id: str, n: str, text: str, extra: dict) -> bool:
         nonlocal hits
@@ -460,59 +738,89 @@ def check_native(rules_by_id: dict, apk: str, limit: int = 25) -> list[dict]:
         with zipfile.ZipFile(apk) as z:
             names = [n for n in z.namelist()
                      if n.startswith("lib/") and n.endswith(".so")]
+            files_skipped = max(0, len(names) - 20)
             for n in names[:20]:
                 try:
                     raw = z.read(n)
                 except Exception:
+                    read_errors += 1
                     continue
+                files_scanned += 1
+                # hash the full artifact even when scanning is capped below
+                source_hash = hashlib.sha256(raw).hexdigest()
                 if len(raw) > 8_000_000:
                     raw = raw[:8_000_000]
+                    files_truncated += 1
                 try:
                     spans = CV.extract(raw)
                 except Exception:
+                    carve_errors += 1
                     continue
                 for sp in spans:
                     rid, ev = score(sp["text"])
+                    span_len = (2 if sp["encoding"] != "ascii" else 1) * len(sp["text"])
                     if rid and emit(rid, n, f"{n}: {ev}",
                                     {"encoding": sp["encoding"],
-                                     "offset": sp["offset"]}):
+                                     "offset": sp["offset"],
+                                     "file_offset": sp["offset"],
+                                     "length": span_len,
+                                     "source_artifact_sha256": source_hash,
+                                     **candidate_labels}):
                         break
                     if hits >= limit:
                         break
                 if hits >= limit:
                     break
-                texts = [sp["text"] for sp in spans
-                         if len(sp["text"]) >= 8][:2000]
-                try:
-                    cands = CV.run_cascade(texts)
-                except Exception:
-                    continue
-                for c in cands:
-                    if c.get("truncated"):
+                budget = CV.DEFAULT_MAX_CANDIDATES
+                for sp in [s for s in spans if len(s["text"]) >= 8][:2000]:
+                    if budget <= 0 or hits >= limit:
                         break
-                    try:
-                        dec = c["decoded"].decode("utf-8", "replace")
-                    except Exception:
-                        continue
-                    rid, ev = score(dec)
-                    if rid and emit(rid, n, f"{n}: {c['transform']} {ev}",
-                                    {"carved": True,
-                                     "transform": c["transform"]}):
-                        break
-                    if hits >= limit:
-                        break
+                    for name, unit, dec_bytes, params in CV.cascade_units(
+                            sp["text"], max_candidates=budget):
+                        budget -= 1
+                        try:
+                            dec = dec_bytes.decode("utf-8", "replace")
+                        except Exception:
+                            continue
+                        mult = 2 if sp["encoding"] != "ascii" else 1
+                        pos = max(0, sp["text"].find(unit))
+                        off = sp["offset"] + pos * mult
+                        unit_len = len(unit) * mult
+                        rid, ev = score(dec)
+                        if rid and emit(rid, n, f"{n}: {name} {ev}",
+                                        {"carved": True,
+                                         "transform": name,
+                                         "transform_parameters": params,
+                                         "decoded_sha256": hashlib.sha256(
+                                             dec_bytes).hexdigest(),
+                                         "file_offset": off,
+                                         "length": unit_len,
+                                         "source_artifact_sha256": source_hash,
+                                         **candidate_labels}):
+                            break
+                        if hits >= limit:
+                            break
                 if hits >= limit:
                     break
     except zipfile.BadZipFile:
         pass
-    if hits >= limit and out:
+    truncated = bool(hits >= limit and out)
+    if truncated:
         for f in out:
             f.setdefault("detail", {})["truncated"] = True
         out[-1]["evidence"] += f" [truncated at {limit} hits]"
+    if stats is not None:
+        stats.update({"files_scanned": files_scanned, "hits": hits,
+                      "files_skipped": files_skipped,
+                      "files_truncated": files_truncated,
+                      "read_errors": read_errors,
+                      "carve_errors": carve_errors,
+                      "truncated_any": truncated})
     return out
 
 
-def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict]:
+def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25,
+                stats: dict | None = None) -> list[dict]:
     """Scan decoded text for patterns. Skipped entirely for packed samples.
 
     A rule may restrict itself to specific file extensions via
@@ -522,10 +830,16 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
 
     params.multiline=true reads the whole file with DOTALL (for smali
     const-string + invoke pairs). params.entropy_min=4.5 additionally flags
-    high-entropy tokens (>=20 chars) as possible secrets.
+    high-entropy tokens (>=20 chars) as possible secrets. When `stats` is
+    given it receives `rules_evaluated`, `truncated_any` (hit cap), and
+    `files_truncated` (500 KB multiline read cap).
     """
     out: list[dict] = []
+    totals = {"rules_evaluated": 0, "truncated_any": False,
+              "files_truncated": 0}
     if not decoded or not os.path.isdir(decoded):
+        if stats is not None:
+            stats.update(totals)
         return out
     default_exts = {".java", ".smali", ".kt", ".xml", ".json", ".txt", ".js"}
     for r in rules:
@@ -571,7 +885,10 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
                 try:
                     with open(p, encoding="utf-8", errors="replace") as fh:
                         if multiline:
-                            content = fh.read(500_000)
+                            content = fh.read(500_000 + 1)
+                            if len(content) > 500_000:
+                                content = content[:500_000]
+                                totals["files_truncated"] += 1
                             m = rx.search(content)
                             if m:
                                 rel = os.path.relpath(p, decoded)
@@ -619,18 +936,24 @@ def check_regex(rules: list[R.Rule], decoded: str, limit: int = 25) -> list[dict
         if hits >= limit:
             # Silent truncation is a lie: mark every finding from this rule and
             # leave a human-visible note on the last one.
+            totals["truncated_any"] = True
             for i in range(start, len(out)):
                 det = out[i].setdefault("detail", {})
                 det["truncated"] = True
                 det["limit"] = limit
             out[-1]["evidence"] += f" [truncated at {limit} hits]"
+        totals["rules_evaluated"] += 1
+    if stats is not None:
+        stats.update(totals)
     return out
 
 
 # ------------------------------------------------------------------- analyse
 def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
             do_decode: bool = True, do_regex: bool = True,
-            preflight_check: bool = True, platform_perms: str | None = None) -> dict:
+            preflight_check: bool = True, platform_perms: str | None = None,
+            command=None) -> dict:
+    started_at = now()
     digest = sha256(apk)
     ws = workspace(out_root, digest)
     decode_dir = os.path.join(ws, "apktool")
@@ -642,7 +965,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
 
     blind_code = False
     if do_decode and pre.get("ok", True):
-        decoded_ok, decode_msg = apktools.decode(apk, decode_dir)
+        decoded_ok, decode_msg = apktools.decode(apk, decode_dir, root=ws)
         if decoded_ok:
             man = mf.parse(os.path.join(decode_dir, "AndroidManifest.xml"))
             nsc = mf.read_network_security_config(decode_dir)
@@ -694,15 +1017,21 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     target_sdk = man.get("target_sdk") or bad.get("targetSdk", "")
     perms = man.get("uses_permissions") or bad.get("permissions", [])
 
-    all_rules, rule_errors = R.load_dir(rules_dir)
+    rule_inventory: dict = {}
+    all_rules, rule_errors = R.load_dir(rules_dir, inventory=rule_inventory)
     ppath = platform_perms or os.path.join(rules_dir, "platform_permissions.txt")
     platform = load_platform_perms(ppath)
     if not platform:
         rule_errors.append(f"platform permission list empty or missing: {ppath} "
                            f"(AS-0002 will over-report)")
+        rule_inventory["errors"] = list(rule_errors)
 
     # Blob-level findings that are not rule driven (kept always-on, high signal)
     findings: list[dict] = []
+    regex_stats: dict = {}
+    taint_stats: dict = {}
+    reach_coverage: dict = {}
+    native_stats: dict = {}
     if packed:
         for p in packed:
             findings.append({
@@ -724,6 +1053,7 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
             decoded_ok and not blind_code) else []
         findings += check_manifest(all_rules, man, nsc, platform, file_paths,
                                    sig, backup_rules)
+        findings += nsc_blind_findings(nsc)
         if blind_code:
             findings.append({
                 "id": "BLIND-0003", "tool": "apk-surface", "rule": "BLIND-0003",
@@ -740,13 +1070,15 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
             from . import taint_smali as TS  # local: taint_smali imports VENDOR_PREFIXES from here
             from . import callgraph as CG  # local: same cycle, same reason
             findings += check_regex([r for r in all_rules if r.kind == "regex"],
-                                    decode_dir)
-            findings += TS.scan(decode_dir, [r for r in all_rules if r.kind == "smali-taint"])
+                                    decode_dir, stats=regex_stats)
+            findings += TS.scan(decode_dir, [r for r in all_rules if r.kind == "smali-taint"],
+                                stats=taint_stats)
             findings += CG.check_reachability(
-                [r for r in all_rules if r.kind == "reachability"], decode_dir, man)
+                [r for r in all_rules if r.kind == "reachability"], decode_dir, man,
+                coverage=reach_coverage)
             by_id = {r.id: r for r in all_rules}
             if st.get("so_files"):
-                findings += check_native(by_id, apk)
+                findings += check_native(by_id, apk, stats=native_stats)
         elif do_regex and (packed or blind_code):
             findings.append({
                 "id": "BLIND-0002", "tool": "apk-surface", "rule": "BLIND-0002",
@@ -768,6 +1100,17 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
     blind_spots = [{"id": f["rule"], "reason": f["title"],
                     "consequence": f.get("recommendation", "")}
                    for f in findings if f.get("rule", "").startswith("BLIND-")]
+    stages = compute_stages(
+        decoded_ok=decoded_ok, has_manifest=bool(man), manifest_only=blind_code,
+        do_regex=do_regex, packed=packed, has_so_files=bool(st.get("so_files")),
+        kinds_present={r.kind for r in all_rules},
+        taint_stats=taint_stats,
+        reach_coverage=reach_coverage,
+        regex_stats=regex_stats,
+        native_stats=native_stats)
+    analysis_status = build_analysis_status(
+        decoded_ok=decoded_ok, manifest_only=blind_code, packed=packed,
+        rule_errors=rule_errors, stages=stages)
 
     report = {
         "tool": "apk-surface",
@@ -802,10 +1145,14 @@ def analyse(apk: str, out_root: str, *, rules_dir: str = DEFAULT_RULES,
         "platform_permissions_known": len(platform),
         "rule_errors": rule_errors,
         "rule_count": len(all_rules),
+        "rule_inventory": rule_inventory,
+        "analysis": analysis_status,
         "findings": findings,
         "blind_spots": blind_spots,
         "severity_counts": sev_count,
     }
+    EV.attach_report_metadata(report, started_at=started_at, completed_at=now(),
+                              command=command)
     write_json(os.path.join(ws, "analysis.json"), report)
     if findings:
         from .utils import append_jsonl

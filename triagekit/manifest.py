@@ -225,25 +225,59 @@ def json_key(o) -> str:
     return json.dumps(o, sort_keys=True)
 
 
+_TRUST_CHILD_TAGS = ("certificates", "anchors")
+
+
+def _trust_anchors_of(el) -> tuple[list[str], list[str]]:
+    """Sources + uninterpreted children of every <trust-anchors> under el.
+
+    Canonical schema: <trust-anchors><certificates src="user"/></trust-anchors>.
+    The <anchors> dialect seen in older tooling output is kept for
+    compatibility. Children that are neither, or that lack src, are returned
+    separately so "no user CA" stays distinguishable from "not understood".
+    """
+    srcs: list[str] = []
+    unknown: list[str] = []
+    for ta in el.findall("trust-anchors"):
+        for child in ta:
+            if child.tag not in _TRUST_CHILD_TAGS:
+                unknown.append(child.tag)
+                continue
+            src = child.get("src")
+            if src is None or not str(src).strip():
+                unknown.append(f"{child.tag}(missing src)")
+                continue
+            srcs.append(str(src))
+    return srcs, unknown
+
+
 def _nsc_from_tree(root) -> dict:
     """Pull the interesting bits out of a <network-security-config> element."""
     domains = []
     for tag, kind in (("base-config", "base-config"), ("debug-overrides", "debug-overrides")):
         for el in root.findall(tag):
-            domains.append({
+            trust, unknown = _trust_anchors_of(el)
+            rec = {
                 "kind": kind,
                 "cleartext": el.get("cleartextTrafficPermitted"),
-                "trust_anchors": [e.get("src") for e in el.findall("trust-anchors/anchors")],
+                "trust_anchors": trust,
                 "certificates": [e.get("src") for e in el.findall("certificates")],
-            })
+            }
+            if unknown:
+                rec["unknown_trust_anchors"] = unknown
+            domains.append(rec)
     for dom in root.findall("domain-config"):
-        domains.append({
+        trust, unknown = _trust_anchors_of(dom)
+        rec = {
             "kind": "domain-config",
             "domain": dom.findtext("domain"),
             "cleartext": dom.get("cleartextTrafficPermitted"),
             "pinning": dom.findtext("pin-set") is not None,
-            "trust_anchors": [e.get("src") for e in dom.findall("trust-anchors/anchors")],
-        })
+            "trust_anchors": trust,
+        }
+        if unknown:
+            rec["unknown_trust_anchors"] = unknown
+        domains.append(rec)
     return {
         "domains": domains,
         "has_debug_overrides": root.find("debug-overrides") is not None,
@@ -282,6 +316,8 @@ def find_network_security_config(apk: str, max_files: int = 2000) -> list[dict]:
                 try:
                     root = axml.parse_bytes(raw)
                 except Exception:  # noqa: BLE001
+                    out.append({"file": n, "parse_error": True,
+                                "source": "content-scan (resource paths are obfuscated)"})
                     continue
                 if root.tag != "network-security-config":
                     continue

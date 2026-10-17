@@ -6,7 +6,7 @@ import os
 import re
 import zipfile
 
-from .utils import have, run, which
+from .utils import confine, have, run, which
 
 
 def badging(apk: str) -> dict:
@@ -45,10 +45,12 @@ def signature(apk: str) -> dict:
         return {"ok": False, "note": "apksigner not installed (pkg install apksigner)"}
     rc, out = run(["apksigner", "verify", "--verbose", "--print-certs", apk], timeout=120)
     d: dict = {"ok": rc == 0}
-    m = re.search(r"Signer #1 certificate SHA-256 digest: ([0-9a-fA-F]+)", out)
+    # apksigner prints "Signer #1 certificate ..." on some builds and
+    # "V1 Signer: certificate ..." / "V2 Signer: certificate ..." on others.
+    m = re.search(r"certificate SHA-256 digest: ([0-9a-fA-F]+)", out)
     if m:
         d["sha256"] = m.group(1)
-    m = re.search(r"Signer #1 certificate DN: (.+)", out)
+    m = re.search(r"certificate DN: (.+)", out)
     if m:
         d["dn"] = m.group(1).strip()
     for scheme in ("v1", "v2", "v3", "v4"):
@@ -90,7 +92,26 @@ def structure(apk: str) -> dict:
 
 
 # ------------------------------------------------------------------- apktool
-def decode(apk: str, out_dir: str, *, keep_res: bool = True, timeout: int = 600) -> tuple[bool, str]:
+def reset_stale_decode(out_dir: str, *, root: str) -> tuple[bool, str]:
+    """Wipe a stale manifest-only decode tree, confined to *root*.
+
+    The only destructive operation in the toolkit. The path must resolve
+    inside *root* (``utils.confine``, realpath-based) before anything is
+    removed; a refusal is returned, never silently ignored.
+    """
+    try:
+        safe = confine(out_dir, root)
+    except ValueError as exc:
+        return False, f"cleanup refused: {exc}"
+    if not os.path.exists(os.path.join(safe, ".manifest-only")):
+        return False, "no stale manifest-only marker; nothing removed"
+    import shutil
+    shutil.rmtree(safe, ignore_errors=True)
+    return True, f"removed stale manifest-only tree: {out_dir}"
+
+
+def decode(apk: str, out_dir: str, *, keep_res: bool = True, timeout: int = 600,
+           root: str | None = None) -> tuple[bool, str]:
     """Full apktool decode. Optional: see decode_manifest_only for the fallback."""
     if not which("apktool"):
         return False, "apktool not installed (pkg install apktool)"
@@ -98,8 +119,9 @@ def decode(apk: str, out_dir: str, *, keep_res: bool = True, timeout: int = 600)
         # A fallback tree (manifest-only, no smali) must never masquerade as a
         # full decode: stale .manifest-only means wipe and re-decode fresh.
         if os.path.exists(os.path.join(out_dir, ".manifest-only")):
-            import shutil
-            shutil.rmtree(out_dir, ignore_errors=True)
+            wiped, detail = reset_stale_decode(out_dir, root=root or out_dir)
+            if not wiped:
+                return False, detail
         else:
             return True, f"reused existing decode: {out_dir}"
     os.makedirs(os.path.dirname(out_dir) or ".", exist_ok=True)
